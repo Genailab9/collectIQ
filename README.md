@@ -19,6 +19,7 @@ This GitHub repository hosts two independent roots on separate long-lived branch
 
 ```bash
 npm install
+npm run env:auto
 npm run build
 npm run start:dev
 ```
@@ -34,6 +35,19 @@ Common deployment/runtime variables:
 - `NEXT_PUBLIC_APP_URL`
 - `COLLECTIQ_REQUIRE_TLS`
 - `COLLECTIQ_TRUST_PROXY`
+
+## Auto Config
+
+Generate a safe local `.env` with one command:
+
+```bash
+npm run env:auto
+```
+
+This keeps existing values when present and auto-generates missing secure defaults, including base64 AES-256 keys for:
+
+- `COLLECTIQ_DATA_KEY`
+- `COLLECTIQ_PII_KEY`
 
 ## Production Start
 

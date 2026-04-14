@@ -5,6 +5,7 @@
   "scripts": {
     "build": "nest build",
     "lint": "eslint \"src/**/*.ts\"",
+    "env:auto": "node scripts/auto-config.mjs",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "start": "nest start",
