@@ -5,8 +5,10 @@ import { useQuery } from "@tanstack/react-query";
 import { ExecutionSummary } from "@/components/execution/execution-summary";
 import { NegotiationInsightsCard } from "@/components/execution/negotiation-insights-card";
 import { AgentAssistPanel } from "@/components/execution/agent-assist-panel";
+import { NextBestAction } from "@/components/execution/next-best-action";
 import { TimelinePanel } from "@/components/timeline/timeline-panel";
 import { getExecutionTrace } from "@/lib/api-client";
+import { labelState } from "@/lib/state-copy";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 const PHASES = ["DATA", "CALL", "APPROVAL", "PAYMENT", "SYNC"] as const;
@@ -38,6 +40,7 @@ export default function ExecutionDetailPage({
         <NegotiationInsightsCard trace={traceQuery.data} />
         <AgentAssistPanel trace={traceQuery.data} />
       </div>
+      <NextBestAction correlationId={correlationId} machineStates={stateByPhase} />
       <Card>
         <CardHeader>
           <CardTitle>Current State</CardTitle>
@@ -46,7 +49,7 @@ export default function ExecutionDetailPage({
           {PHASES.map((phase) => (
             <div key={phase} className="rounded-md border p-2 text-sm">
               <div className="text-xs text-muted-foreground">{phase}</div>
-              <div className="font-medium">{stateByPhase[phase] ?? "NOT_STARTED"}</div>
+              <div className="font-medium">{labelState(stateByPhase[phase] ?? "NOT_STARTED")}</div>
             </div>
           ))}
         </CardContent>

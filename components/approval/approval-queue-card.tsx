@@ -2,160 +2,22 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { approveRequest, fetchPendingApprovals, rejectRequest, type PendingApprovalItem } from "@/lib/api-client";
+import { approveRequest, fetchPendingApprovals, rejectRequest } from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast-provider";
-import { useAuthUser } from "@/lib/use-auth-user";
+import { labelState } from "@/lib/state-copy";
 
 const POLL_MS = 8000;
 const QUERY_KEY = ["approvals-pending"] as const;
 
-type RowProps = {
-  item: PendingApprovalItem;
-  officerId: string;
-};
-
-function ApprovalRequestRow({ item, officerId }: RowProps) {
-  const [lastFailedAction, setLastFailedAction] = useState<null | (() => void)>(null);
-  const { showToast } = useToast();
-  const authUser = useAuthUser();
-  const isOperator = authUser.data?.role === "operator";
-  const queryClient = useQueryClient();
-
-  const currentState = item.currentState;
-  const canDecide =
-    currentState === "PENDING" ||
-    currentState === "REQUESTED" ||
-    currentState === "COUNTERED" ||
-    currentState === "TIMEOUT" ||
-    currentState === "ESCALATED";
-
-  const approveMutation = useMutation({
-    mutationFn: () =>
-      approveRequest({
-        correlationId: item.correlationId,
-        fromState: currentState,
-        officerId,
-      }),
-    onSuccess: async () => {
-      setLastFailedAction(null);
-      showToast({ title: "Approved", description: item.correlationId, variant: "success" });
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-    },
-    onError: (error) => {
-      setLastFailedAction(() => () => approveMutation.mutate());
-      showToast({
-        title: "Approve failed",
-        description: (error as { message?: string })?.message ?? "Approve failed.",
-        variant: "error",
-      });
-    },
-  });
-
-  const rejectMutation = useMutation({
-    mutationFn: () =>
-      rejectRequest({
-        correlationId: item.correlationId,
-        fromState: currentState,
-        officerId,
-      }),
-    onSuccess: async () => {
-      setLastFailedAction(null);
-      showToast({ title: "Rejected", description: item.correlationId, variant: "success" });
-      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-    },
-    onError: (error) => {
-      setLastFailedAction(() => () => rejectMutation.mutate());
-      showToast({
-        title: "Reject failed",
-        description: (error as { message?: string })?.message ?? "Reject failed.",
-        variant: "error",
-      });
-    },
-  });
-
-  const isBusy = approveMutation.isPending || rejectMutation.isPending;
-  const negotiated =
-    item.negotiatedAmountCents != null ? `${(item.negotiatedAmountCents / 100).toFixed(2)}` : "—";
-  const priorityLabel =
-    item.priority?.label != null || item.priority?.score != null
-      ? [item.priority?.label, item.priority?.score != null ? `#${item.priority.score}` : null]
-          .filter(Boolean)
-          .join(" ")
-      : "—";
-
-  return (
-    <div className="space-y-2 rounded-md border p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="font-mono text-sm font-medium">{item.correlationId}</div>
-        <Badge
-          variant={
-            currentState === "APPROVED"
-              ? "default"
-              : currentState === "REJECTED"
-                ? "destructive"
-                : "secondary"
-          }
-        >
-          {currentState}
-        </Badge>
-      </div>
-      <div className="text-xs text-muted-foreground">Queue: {item.queueStage}</div>
-
-      <div className="grid gap-2 text-sm md:grid-cols-2">
-        <div>
-          <span className="text-muted-foreground">Borrower: </span>
-          <span>{item.borrower.name ?? "—"}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Phone: </span>
-          <span>{item.borrower.phone ?? "—"}</span>
-        </div>
-      </div>
-      <div className="grid gap-2 text-sm md:grid-cols-2">
-        <div>
-          <span className="text-muted-foreground">Negotiated: </span>
-          <span>{negotiated}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Priority: </span>
-          <span>{priorityLabel}</span>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={isBusy || !canDecide} onClick={() => approveMutation.mutate()}>
-          Approve
-        </Button>
-        <Button
-          variant="destructive"
-          disabled={isBusy || !canDecide || isOperator}
-          onClick={() => rejectMutation.mutate()}
-        >
-          Reject
-        </Button>
-      </div>
-
-      {!canDecide ? (
-        <p className="text-xs text-muted-foreground">Decision not allowed in state {currentState}.</p>
-      ) : null}
-      {isOperator ? <p className="text-xs text-muted-foreground">Operator role cannot reject approvals.</p> : null}
-      {lastFailedAction ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2">
-          <p className="text-xs text-muted-foreground">Decision action failed.</p>
-          <Button size="sm" variant="secondary" className="mt-2" disabled={isBusy} onClick={lastFailedAction}>
-            Retry last action
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export function ApprovalQueueCard() {
   const [officerId, setOfficerId] = useState("officer-1");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [singleBusyId, setSingleBusyId] = useState<string | null>(null);
+  const { showToast } = useToast();
+  const queryClient = useQueryClient();
 
   const pendingQuery = useQuery({
     queryKey: QUERY_KEY,
@@ -164,11 +26,81 @@ export function ApprovalQueueCard() {
     retry: 1,
   });
 
-  const sorted = [...(pendingQuery.data ?? [])].sort((a, b) => {
-    const sa = a.priority?.score ?? 0;
-    const sb = b.priority?.score ?? 0;
-    return sb - sa;
+  const sorted = [...(pendingQuery.data ?? [])].sort(
+    (a, b) => (b.priority?.score ?? 0) - (a.priority?.score ?? 0),
+  );
+  const selectedSet = new Set(selected);
+  const allSelected = sorted.length > 0 && sorted.every((x) => selectedSet.has(x.correlationId));
+
+  const bulkMutation = useMutation({
+    mutationFn: async (mode: "approve" | "reject") => {
+      const rows = sorted.filter((r) => selectedSet.has(r.correlationId));
+      await Promise.all(
+        rows.map((row) =>
+          mode === "approve"
+            ? approveRequest({
+                correlationId: row.correlationId,
+                fromState: row.currentState,
+                officerId: officerId.trim() || "officer-1",
+              })
+            : rejectRequest({
+                correlationId: row.correlationId,
+                fromState: row.currentState,
+                officerId: officerId.trim() || "officer-1",
+              }),
+        ),
+      );
+      return { mode, count: rows.length };
+    },
+    onSuccess: async ({ mode, count }) => {
+      setSelected([]);
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      showToast({
+        title: mode === "approve" ? "Bulk approve complete" : "Bulk reject complete",
+        description: `${count} case(s) processed.`,
+        variant: "success",
+      });
+    },
+    onError: (error) =>
+      showToast({
+        title: "Bulk action failed",
+        description: (error as { message?: string })?.message ?? "Could not process selected cases.",
+        variant: "error",
+      }),
   });
+
+  const runSingleDecision = async (correlationId: string, fromState: string, mode: "approve" | "reject") => {
+    setSingleBusyId(correlationId);
+    try {
+      if (mode === "approve") {
+        await approveRequest({
+          correlationId,
+          fromState,
+          officerId: officerId.trim() || "officer-1",
+        });
+      } else {
+        await rejectRequest({
+          correlationId,
+          fromState,
+          officerId: officerId.trim() || "officer-1",
+        });
+      }
+      await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      showToast({
+        title: mode === "approve" ? "Case approved" : "Case rejected",
+        description: correlationId,
+        variant: "success",
+      });
+    } catch (error) {
+      showToast({
+        title: mode === "approve" ? "Approve failed" : "Reject failed",
+        description: (error as { message?: string })?.message ?? "Action failed.",
+        variant: "error",
+      });
+    } finally {
+      setSingleBusyId(null);
+    }
+  };
 
   return (
     <Card>
@@ -179,6 +111,7 @@ export function ApprovalQueueCard() {
         <p className="text-xs text-muted-foreground">
           Loaded from <span className="font-mono">GET /approvals/pending</span> (refreshes every {POLL_MS / 1000}s).
         </p>
+
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
           <label className="text-sm text-muted-foreground">
             Officer ID
@@ -196,23 +129,118 @@ export function ApprovalQueueCard() {
           </div>
         </div>
 
+        {sorted.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border p-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={(e) => setSelected(e.target.checked ? sorted.map((x) => x.correlationId) : [])}
+              />
+              Select all
+            </label>
+            <Button
+              size="sm"
+              disabled={bulkMutation.isPending || selected.length === 0}
+              onClick={() => bulkMutation.mutate("approve")}
+            >
+              {bulkMutation.isPending ? "Working..." : "Approve Selected"}
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={bulkMutation.isPending || selected.length === 0}
+              onClick={() => bulkMutation.mutate("reject")}
+            >
+              {bulkMutation.isPending ? "Working..." : "Reject Selected"}
+            </Button>
+            <span className="text-xs text-muted-foreground">{selected.length} selected</span>
+          </div>
+        ) : null}
+
         {pendingQuery.isError ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
             {(pendingQuery.error as { message?: string })?.message ?? "Failed to load pending approvals."}
           </div>
         ) : null}
 
-        {pendingQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading queue…</p> : null}
+        {pendingQuery.isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-20 animate-pulse rounded-md border bg-muted/40" />
+            ))}
+          </div>
+        ) : null}
 
         {!pendingQuery.isLoading && sorted.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No items waiting for approval.</p>
+          <p className="text-sm text-muted-foreground">No pending approvals.</p>
         ) : null}
 
         {sorted.length > 0 ? (
           <div className="space-y-3">
-            {sorted.map((item) => (
-              <ApprovalRequestRow key={item.correlationId} item={item} officerId={officerId.trim() || "officer-1"} />
-            ))}
+            {sorted.map((item) => {
+              const checked = selectedSet.has(item.correlationId);
+              return (
+                <div key={item.correlationId} className="space-y-2 rounded-md border p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() =>
+                          setSelected((prev) =>
+                            prev.includes(item.correlationId)
+                              ? prev.filter((x) => x !== item.correlationId)
+                              : [...prev, item.correlationId],
+                          )
+                        }
+                      />
+                      <span className="font-mono text-sm font-medium">{item.correlationId}</span>
+                    </label>
+                    <Badge variant="secondary">{labelState(item.currentState)}</Badge>
+                  </div>
+                  <div className="grid gap-2 text-sm md:grid-cols-2">
+                    <div>
+                      <span className="text-muted-foreground">Borrower: </span>
+                      <span>{item.borrower.name ?? "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Phone: </span>
+                      <span>{item.borrower.phone ?? "—"}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Negotiated amount: </span>
+                      <span>
+                        {item.negotiatedAmountCents != null
+                          ? `$${(item.negotiatedAmountCents / 100).toFixed(2)}`
+                          : "—"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Priority: </span>
+                      <span>{item.priority?.label ?? "—"}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      disabled={bulkMutation.isPending || singleBusyId === item.correlationId}
+                      onClick={() => runSingleDecision(item.correlationId, item.currentState, "approve")}
+                    >
+                      {singleBusyId === item.correlationId ? "Working..." : "Approve"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      disabled={bulkMutation.isPending || singleBusyId === item.correlationId}
+                      onClick={() => runSingleDecision(item.correlationId, item.currentState, "reject")}
+                    >
+                      {singleBusyId === item.correlationId ? "Working..." : "Reject"}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : null}
       </CardContent>

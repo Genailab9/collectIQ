@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { fetchPendingPayments } from "@/lib/api-client";
+import { labelState } from "@/lib/state-copy";
 import { PaymentStatusCard } from "@/components/payment/payment-status-card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -43,9 +44,15 @@ export default function PaymentsPage() {
               {(pendingQuery.error as { message?: string })?.message ?? "Failed to load pending payments."}
             </p>
           ) : null}
-          {pendingQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+          {pendingQuery.isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-10 animate-pulse rounded bg-muted/40" />
+              ))}
+            </div>
+          ) : null}
           {!pendingQuery.isLoading && (pendingQuery.data?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">No payments in INITIATED or PROCESSING.</p>
+            <p className="text-sm text-muted-foreground">All payments completed.</p>
           ) : null}
           {(pendingQuery.data?.length ?? 0) > 0 ? (
             <div className="overflow-x-auto">
@@ -65,7 +72,7 @@ export default function PaymentsPage() {
                       <td className="py-2 pr-4">
                         {row.amountCents != null ? `$${(row.amountCents / 100).toFixed(2)}` : "—"}
                       </td>
-                      <td className="py-2 pr-4">{row.currentState}</td>
+                      <td className="py-2 pr-4">{labelState(row.currentState)}</td>
                       <td className="py-2">
                         <Link
                           href={`/execution/${encodeURIComponent(row.correlationId)}`}

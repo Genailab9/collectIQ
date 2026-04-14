@@ -7,6 +7,7 @@ import { ExecutionSummaryCard } from "@/components/execution/execution-summary-c
 import { MachineStateCard } from "@/components/execution/machine-state-card";
 import { ActionPanel } from "@/components/execution/action-panel";
 import { PerformanceDashboard } from "@/components/dashboard/performance-dashboard";
+import { SystemActivityFeed } from "@/components/system/system-activity-feed";
 import { TimelinePanel } from "@/components/timeline/timeline-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -119,6 +120,7 @@ export default function DashboardPage() {
           <TimelinePanel trace={traceQuery.data} />
         </>
       ) : null}
+      <SystemActivityFeed />
     </div>
   );
 }

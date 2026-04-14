@@ -410,6 +410,36 @@ export async function fetchDashboardMetrics(context: RequestContext = {}): Promi
   return data;
 }
 
+export async function fetchHealth(): Promise<{
+  status: "ok";
+  uptime: number;
+  db: "connected";
+  version: string;
+}> {
+  const { data } = await apiClient.get("/health");
+  return data as { status: "ok"; uptime: number; db: "connected"; version: string };
+}
+
+export type StructuredLogEvent = {
+  timestamp?: string;
+  at?: string;
+  result?: string;
+  surface?: string;
+  message?: string;
+  correlationId?: string;
+  phase?: string;
+  adapter?: string;
+};
+
+export async function fetchStructuredLogExport(limit = 50, context: RequestContext = {}): Promise<StructuredLogEvent[]> {
+  const { headers } = withHeaders(context, "structured-export");
+  const { data } = await apiClient.get<{ events: StructuredLogEvent[] }>(
+    `/observability/structured-log-export?limit=${encodeURIComponent(String(limit))}`,
+    { headers },
+  );
+  return data.events ?? [];
+}
+
 export type PendingApprovalItem = {
   correlationId: string;
   tenantId: string;

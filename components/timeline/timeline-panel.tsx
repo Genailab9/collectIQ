@@ -11,6 +11,7 @@ import {
 import type { ExecutionTrace } from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { labelState } from "@/lib/state-copy";
 
 function machineColor(machine: string): string {
   if (machine === "CALL") return "bg-blue-500";
@@ -76,9 +77,9 @@ export function TimelinePanel({ trace }: { trace?: ExecutionTrace | null }) {
                     </Badge>
                     <div className="flex items-center gap-1 text-sm font-medium">
                       {stateIcon(t.to)}
-                      <span>{t.from}</span>
+                      <span>{labelState(t.from)}</span>
                       <ArrowRight className="size-3 text-muted-foreground" />
-                      <span>{t.to}</span>
+                      <span>{labelState(t.to)}</span>
                     </div>
                   </div>
                   <div className="grid gap-2 text-xs text-muted-foreground md:grid-cols-2">

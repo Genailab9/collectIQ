@@ -21,6 +21,7 @@ Recommended default branch: `frontend`.
 
 ```bash
 npm install
+npm run env:auto
 npm run dev
 ```
 
@@ -28,6 +29,16 @@ Set environment variables:
 
 - `NEXT_PUBLIC_API_URL`
 - `NEXT_PUBLIC_APP_URL`
+
+## Auto Config
+
+Generate a local `.env.local` with one command:
+
+```bash
+npm run env:auto
+```
+
+This keeps existing values and fills missing frontend + BFF env keys with demo-safe defaults.
 
 ## Build
 

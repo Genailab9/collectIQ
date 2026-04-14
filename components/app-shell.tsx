@@ -37,6 +37,7 @@ const platformNav = [
 const adminNav = [
   { href: "/system", label: "System health" },
   { href: "/admin", label: "Admin" },
+  { href: "/demo", label: "Demo cockpit" },
   { href: "/settings/feature-flags", label: "Feature flags" },
 ];
 

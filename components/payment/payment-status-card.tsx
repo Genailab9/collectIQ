@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { confirmPayment, createPaymentIntent, getExecutionTrace } from "@/lib/api-client";
 import { useToast } from "@/components/ui/toast-provider";
 import { useAuthUser } from "@/lib/use-auth-user";
+import { labelState } from "@/lib/state-copy";
 
 function badgeVariantForState(state: string) {
   if (state === "SUCCESS" || state === "COMPLETED") {
@@ -63,7 +64,7 @@ export function PaymentStatusCard() {
       setLastFailedAction(null);
       showToast({
         title: "Intent created",
-        description: `State: ${data.toState}`,
+        description: `State: ${labelState(data.toState)}`,
         variant: "success",
       });
     },
@@ -87,7 +88,7 @@ export function PaymentStatusCard() {
       setLastFailedAction(null);
       showToast({
         title: "Payment confirmed",
-        description: `State: ${data.toState}`,
+        description: `State: ${labelState(data.toState)}`,
         variant: "success",
       });
     },
@@ -137,7 +138,7 @@ export function PaymentStatusCard() {
           </div>
           <div className="rounded-md border p-3">
             <div className="text-xs text-muted-foreground">Status</div>
-            <Badge variant={badgeVariantForState(paymentState)}>{paymentState}</Badge>
+            <Badge variant={badgeVariantForState(paymentState)}>{labelState(paymentState)}</Badge>
           </div>
         </div>
 

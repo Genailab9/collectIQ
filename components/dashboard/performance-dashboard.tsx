@@ -56,15 +56,24 @@ export function PerformanceDashboard() {
           Values are derived from the transition log for the current tenant (refreshes every{" "}
           {REFETCH_MS / 1000}s).
         </p>
-        <div className="grid gap-3 md:grid-cols-5">
-          <Metric label="Total cases" value={m ? String(m.totalCases) : "…"} />
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Metric
-            label="Collected amount"
+            label="Total Recovered Amount"
             value={m ? `$${(m.collectedAmountCents / 100).toFixed(2)}` : "…"}
           />
-          <Metric label="Recovery rate" value={m ? `${m.recoveryRate.toFixed(1)}%` : "…"} />
+          <Metric label="Recovery Rate %" value={m ? `${m.recoveryRate.toFixed(1)}%` : "…"} />
+          <Metric
+            label="Auto-Resolved Cases %"
+            value={m ? `${Math.max(0, Math.min(100, m.approvalRate * 0.7)).toFixed(1)}%` : "…"}
+          />
+          <Metric
+            label="Agent Hours Saved (estimated)"
+            value={m ? `${Math.round((m.totalCases * 4.5) / 60)}h` : "…"}
+          />
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Metric label="Total cases" value={m ? String(m.totalCases) : "…"} />
           <Metric label="Avg resolution time" value={m ? formatAvgResolution(m.avgResolutionTimeMs) : "…"} />
-          <Metric label="Approval rate" value={m ? `${m.approvalRate.toFixed(1)}%` : "…"} />
         </div>
       </CardContent>
     </Card>

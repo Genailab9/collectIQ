@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { fetchActiveExecutions } from "@/lib/api-client";
+import { labelState } from "@/lib/state-copy";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,9 +46,15 @@ export default function ExecutionListPage() {
           <CardTitle>Cases</CardTitle>
         </CardHeader>
         <CardContent>
-          {activeQuery.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+          {activeQuery.isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="h-10 animate-pulse rounded bg-muted/40" />
+              ))}
+            </div>
+          ) : null}
           {!activeQuery.isLoading && (activeQuery.data?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">No active executions for this tenant.</p>
+            <p className="text-sm text-muted-foreground">No active cases.</p>
           ) : null}
           {(activeQuery.data?.length ?? 0) > 0 ? (
             <div className="overflow-x-auto">
@@ -68,7 +75,7 @@ export default function ExecutionListPage() {
                       <td className="py-2 pr-4 font-mono text-xs">{row.correlationId}</td>
                       <td className="py-2 pr-4">{row.currentPhase}</td>
                       <td className="max-w-md truncate py-2 pr-4 font-mono text-xs" title={row.currentStateSummary}>
-                        {row.currentStateSummary}
+                        {labelState(row.currentStateSummary)}
                       </td>
                       <td className="py-2 pr-4 text-xs text-muted-foreground">
                         {new Date(row.lastUpdatedAt).toLocaleString()}
