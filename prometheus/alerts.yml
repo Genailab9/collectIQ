@@ -1,0 +1,48 @@
+# CollectIQ — example Prometheus alert rules (v1).
+# Load with: prometheus --config.file=prometheus.yml where rule_files includes this path.
+# Tune thresholds for your environment and traffic.
+
+groups:
+  - name: collectiq
+    interval: 30s
+    rules:
+      - alert: CollectiqHighExecutionFailureRate
+        expr: |
+          (
+            sum(rate(collectiq_executions_failed_total[5m]))
+            /
+            clamp_min(sum(rate(collectiq_executions_started_total[5m])), 0.001)
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High SMEK execution failure rate
+          description: |
+            More than 20% of started SMEK executions are failing (compliance or exception)
+            over the last 5 minutes. Inspect logs and GET /observability/trace/:correlationId.
+
+      - alert: CollectiqPaymentFailuresSpike
+        expr: sum(rate(collectiq_payment_failures_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Payment failures spike
+          description: |
+            Sustained rate of payment_failures_total exceeds 0.5/s. Check Stripe/Twilio,
+            idempotency rows, and PaymentService structured logs.
+
+      - alert: CollectiqCircuitBreakerOpen
+        expr: |
+          sum(rate(collectiq_circuit_breaker_open_total{event="trip"}[5m])) > 0
+            or
+          sum(rate(collectiq_circuit_breaker_open_total{event="reject"}[1m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Circuit breaker tripped or rejecting traffic
+          description: |
+            Resilience circuits are opening or rejecting calls. Check adapter health,
+            RESILIENCE_FAILURE_THRESHOLD / RESILIENCE_COOLDOWN_MS, and provider status.
