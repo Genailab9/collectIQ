@@ -1,4 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -40,6 +41,7 @@ import {
 import { ApprovalMachineState } from '../state-machine/definitions/approval-machine.definition';
 import { CallMachineState } from '../state-machine/definitions/call-machine.definition';
 import { DataMachineState } from '../state-machine/definitions/data-machine.definition';
+import { PaymentMachineState } from '../state-machine/definitions/payment-machine.definition';
 import { SyncMachineState } from '../state-machine/definitions/sync-machine.definition';
 import { MachineKind } from '../state-machine/types/machine-kind';
 import type { TransitionProposal } from '../state-machine/types/transition-proposal';
@@ -55,6 +57,13 @@ import { StructuredLoggerService } from '../observability/structured-logger.serv
 import { RateLimiterService } from '../rate-limit/rate-limiter.service';
 import { assertSmekTransitionTenantMatchesOptionalAls } from '../tenant/tenant-isolation.policy';
 import { ExecutionFeatureFlagsService } from '../modules/tenant-feature-flags/execution-feature-flags.service';
+import { PAYMENT_PROCESSED, type PaymentProcessedEventPayload } from '../events/payment.events';
+import { SETTLEMENT_ACCEPTED, type SettlementAcceptedEventPayload } from '../events/settlement.events';
+import { ACCOUNT_CLOSED, type AccountClosedEventPayload } from '../events/account.events';
+import { TenantEventStreamService } from '../events/stream/tenant-event-stream.service';
+import { AccountMachineState } from '../state-machine/definitions/account-machine.definition';
+import { CampaignMachineState } from '../state-machine/definitions/campaign-machine.definition';
+import { emitRuntimeProof } from '../runtime-proof/runtime-proof-emitter';
 
 @Injectable()
 export class SmekKernelService implements SmekKernelPort {
@@ -81,6 +90,7 @@ export class SmekKernelService implements SmekKernelPort {
     private readonly rateLimiter: RateLimiterService,
     private readonly resilience: ResilienceService,
     private readonly executionFlags: ExecutionFeatureFlagsService,
+    @Optional() private readonly eventStream?: TenantEventStreamService,
   ) {}
 
   /**
@@ -191,11 +201,14 @@ export class SmekKernelService implements SmekKernelPort {
     }
 
     await this.stateMachine.recordValidatedTransition(resolvedTransition);
+    this.emitStateTransitionStream(resolvedTransition);
+    await this.recordDerivedAccountTransitionIfApplicable(command, resolvedTransition);
 
     const adapterResult = await this.invokeAdapter(command, resolvedTransition);
 
     await this.persistKernelLoopOutputRecord(command, resolvedTransition, adapterResult);
     await this.persistAdapterResult(command, resolvedTransition, adapterResult);
+    await this.emitDomainContractEvents(command, resolvedTransition);
 
     return {
       outcome: SMEK_OUTCOME.COMPLETED,
@@ -215,6 +228,17 @@ export class SmekKernelService implements SmekKernelPort {
       return null;
     } catch (e) {
       if (e instanceof ComplianceBlockedError) {
+        emitRuntimeProof({
+          requirement_id: 'REQ-COMP-001',
+          event_type: 'AUTH_EVENT',
+          tenant_id: gate.tenantId.trim() || 'n/a',
+          metadata: {
+            phase: gate.executionPhase,
+            correlationId: gate.correlationId,
+            blockCode: e.blockCode,
+            reason: e.message,
+          },
+        });
         return {
           outcome: SMEK_OUTCOME.COMPLIANCE_BLOCKED,
           phase: gate.executionPhase,
@@ -225,6 +249,17 @@ export class SmekKernelService implements SmekKernelPort {
         };
       }
       if (e instanceof ComplianceGateInvalidError) {
+        emitRuntimeProof({
+          requirement_id: 'REQ-COMP-001',
+          event_type: 'AUTH_EVENT',
+          tenant_id: gate.tenantId.trim() || 'n/a',
+          metadata: {
+            phase: gate.executionPhase,
+            correlationId: gate.correlationId,
+            blockCode: 'compliance_gate_invalid',
+            reason: e.message,
+          },
+        });
         return {
           outcome: SMEK_OUTCOME.COMPLIANCE_BLOCKED,
           phase: gate.executionPhase,
@@ -302,6 +337,15 @@ export class SmekKernelService implements SmekKernelPort {
       throw new SmekCommandStructuralError(
         'complianceGate.correlationId must match transition.correlationId',
       );
+    }
+    if (command.adapterEnvelope?.nonMutating !== true) {
+      const idemKey = command.idempotency?.key?.trim();
+      const idemStep = command.idempotency?.step?.trim();
+      if (!idemKey || !idemStep) {
+        throw new SmekCommandStructuralError(
+          'Mutating SMEK commands must provide idempotency.key and idempotency.step.',
+        );
+      }
     }
     this.assertPhaseMachineSemantics(command);
     const ingressCount = [
@@ -383,6 +427,7 @@ export class SmekKernelService implements SmekKernelPort {
       [ExecutionLoopPhase.APPROVE]: MachineKind.APPROVAL,
       [ExecutionLoopPhase.PAY]: MachineKind.PAYMENT,
       [ExecutionLoopPhase.SYNC]: MachineKind.SYNC,
+      [ExecutionLoopPhase.CAMPAIGN]: MachineKind.CAMPAIGN,
     };
     const need = expectedMachine[phase];
     if (t.machine !== need) {
@@ -397,6 +442,16 @@ export class SmekKernelService implements SmekKernelPort {
       if (t.from !== DataMachineState.NOT_STARTED || t.to !== DataMachineState.COMPLETED) {
         throw new SmekCommandStructuralError(
           `DATA phase requires transition ${DataMachineState.NOT_STARTED}→${DataMachineState.COMPLETED}.`,
+        );
+      }
+    }
+    if (phase === ExecutionLoopPhase.CAMPAIGN) {
+      if (t.machine !== MachineKind.CAMPAIGN) {
+        throw new SmekCommandStructuralError('CAMPAIGN phase requires MachineKind.CAMPAIGN.');
+      }
+      if (t.from !== CampaignMachineState.DRAFT || t.to !== CampaignMachineState.ACTIVE) {
+        throw new SmekCommandStructuralError(
+          `CAMPAIGN phase requires transition ${CampaignMachineState.DRAFT}→${CampaignMachineState.ACTIVE}.`,
         );
       }
     }
@@ -418,6 +473,16 @@ export class SmekKernelService implements SmekKernelPort {
       }
     }
     if (
+      phase === ExecutionLoopPhase.CALL &&
+      command.telephonyIngress?.source === 'INTERNAL_COUNTER_OFFER'
+    ) {
+      if (t.from !== CallMachineState.WAITING_APPROVAL || t.to !== CallMachineState.NEGOTIATING) {
+        throw new SmekCommandStructuralError(
+          `CALL (INTERNAL_COUNTER_OFFER) requires transition ${CallMachineState.WAITING_APPROVAL}→${CallMachineState.NEGOTIATING}.`,
+        );
+      }
+    }
+    if (
       phase === ExecutionLoopPhase.AUTHENTICATE &&
       command.telephonyIngress?.source === 'INTERNAL_AUTH_CHECKPOINT'
     ) {
@@ -430,7 +495,7 @@ export class SmekKernelService implements SmekKernelPort {
   }
 
   private assertAdapterEnvelopePolicy(command: SmekLoopCommand): void {
-    if (command.phase === ExecutionLoopPhase.DATA) {
+    if (command.phase === ExecutionLoopPhase.DATA || command.phase === ExecutionLoopPhase.CAMPAIGN) {
       return;
     }
     if (command.adapterEnvelope?.nonMutating === true) {
@@ -460,7 +525,7 @@ export class SmekKernelService implements SmekKernelPort {
   }
 
   private phaseRequiresAdapterEnvelope(command: SmekLoopCommand): boolean {
-    if (command.phase === ExecutionLoopPhase.DATA) {
+    if (command.phase === ExecutionLoopPhase.DATA || command.phase === ExecutionLoopPhase.CAMPAIGN) {
       return false;
     }
     if (this.isTelephonyIngressWithoutAdapter(command)) {
@@ -515,6 +580,10 @@ export class SmekKernelService implements SmekKernelPort {
 
     if (phase === ExecutionLoopPhase.DATA && envelope === null) {
       wire('n/a', 'ADAPTER_SKIPPED', 'DATA phase has no outbound adapter');
+      return undefined;
+    }
+    if (phase === ExecutionLoopPhase.CAMPAIGN && envelope === null) {
+      wire('n/a', 'ADAPTER_SKIPPED', 'CAMPAIGN phase has no outbound adapter');
       return undefined;
     }
     if (this.isTelephonyIngressWithoutAdapter(command)) {
@@ -761,6 +830,7 @@ export class SmekKernelService implements SmekKernelPort {
     correlationId: string;
     executionPhase: ExecutionLoopPhase;
     payload: unknown;
+    domainEventKey?: string | null;
   }): Promise<void> {
     let payloadJson: string;
     try {
@@ -773,8 +843,9 @@ export class SmekKernelService implements SmekKernelPort {
       kind: input.kind,
       tenantId: input.tenantId,
       correlationId: input.correlationId,
-      executionPhase: input.executionPhase,
+      executionPhase: String(input.executionPhase),
       payloadJson,
+      domainEventKey: input.domainEventKey ?? null,
     });
 
     try {
@@ -782,6 +853,218 @@ export class SmekKernelService implements SmekKernelPort {
     } catch (cause) {
       throw new SmekOrchestrationAuditError(cause);
     }
+  }
+
+  private async emitDomainContractEvents(
+    command: SmekLoopCommand,
+    resolvedTransition: TransitionProposal,
+  ): Promise<void> {
+    const nowIso = new Date().toISOString();
+    if (
+      resolvedTransition.machine === MachineKind.PAYMENT &&
+      resolvedTransition.to === 'SUCCESS'
+    ) {
+      const amountRaw =
+        typeof resolvedTransition.metadata?.amountCents === 'number'
+          ? resolvedTransition.metadata.amountCents
+          : null;
+      const methodRaw =
+        typeof resolvedTransition.metadata?.method === 'string'
+          ? resolvedTransition.metadata.method.trim()
+          : '';
+      const accountRaw =
+        typeof resolvedTransition.metadata?.approvalCorrelationId === 'string'
+          ? resolvedTransition.metadata.approvalCorrelationId.trim()
+          : resolvedTransition.correlationId.trim();
+      const payload: PaymentProcessedEventPayload = {
+        paymentId: resolvedTransition.correlationId.trim(),
+        accountId: accountRaw || resolvedTransition.correlationId.trim(),
+        amount: amountRaw,
+        method: methodRaw || 'mock',
+        correlationId: resolvedTransition.correlationId.trim(),
+        tenantId: resolvedTransition.tenantId.trim(),
+        timestamp: nowIso,
+      };
+      await this.persistDomainEventIfMissing(command, PAYMENT_PROCESSED, payload);
+    }
+
+    if (
+      resolvedTransition.machine === MachineKind.APPROVAL &&
+      resolvedTransition.to === 'APPROVED'
+    ) {
+      const proposedAmount =
+        typeof resolvedTransition.metadata?.offerAmountCents === 'number'
+          ? resolvedTransition.metadata.offerAmountCents
+          : null;
+      const discountPercentage =
+        typeof resolvedTransition.metadata?.discountPercentage === 'number'
+          ? resolvedTransition.metadata.discountPercentage
+          : null;
+      const payload: SettlementAcceptedEventPayload = {
+        approvalId: resolvedTransition.correlationId.trim(),
+        accountId: resolvedTransition.correlationId.trim(),
+        proposedAmount,
+        discountPercentage,
+        correlationId: resolvedTransition.correlationId.trim(),
+        tenantId: resolvedTransition.tenantId.trim(),
+        timestamp: nowIso,
+      };
+      await this.persistDomainEventIfMissing(command, SETTLEMENT_ACCEPTED, payload);
+    }
+
+    if (
+      resolvedTransition.machine === MachineKind.SYNC &&
+      resolvedTransition.to === SyncMachineState.COMPLETED
+    ) {
+      const payload: AccountClosedEventPayload = {
+        accountId: resolvedTransition.correlationId.trim(),
+        correlationId: resolvedTransition.correlationId.trim(),
+        tenantId: resolvedTransition.tenantId.trim(),
+        timestamp: nowIso,
+      };
+      await this.persistDomainEventIfMissing(command, ACCOUNT_CLOSED, payload);
+    }
+  }
+
+  private emitStateTransitionStream(t: TransitionProposal): void {
+    this.eventStream?.emit({
+      occurredAt: new Date().toISOString(),
+      envelope: 'STATE_TRANSITION',
+      tenantId: t.tenantId.trim(),
+      correlationId: t.correlationId.trim(),
+      machine: t.machine,
+      from: t.from,
+      to: t.to,
+    });
+  }
+
+  private async persistDomainEventIfMissing(
+    command: SmekLoopCommand,
+    eventType: typeof PAYMENT_PROCESSED | typeof SETTLEMENT_ACCEPTED | typeof ACCOUNT_CLOSED,
+    payload: PaymentProcessedEventPayload | SettlementAcceptedEventPayload | AccountClosedEventPayload,
+  ): Promise<void> {
+    const eventId = `${eventType}:${payload.tenantId}:${payload.correlationId}`;
+    let payloadJson: string;
+    try {
+      payloadJson = this.atRestCipher.sealPayloadJson(
+        JSON.stringify({
+          eventId,
+          eventType,
+          payload,
+        }),
+      );
+    } catch (cause) {
+      throw new SmekOrchestrationAuditError(cause);
+    }
+
+    const insertResult = await this.orchestrationAudit
+      .createQueryBuilder()
+      .insert()
+      .into(SmekOrchestrationAuditEntity)
+      .values({
+        id: randomUUID(),
+        kind: SMEK_ORCHESTRATION_AUDIT_KIND.DomainEvent,
+        tenantId: payload.tenantId.trim(),
+        correlationId: payload.correlationId.trim(),
+        executionPhase: String(command.phase),
+        payloadJson,
+        domainEventKey: eventId,
+      })
+      .orIgnore()
+      .execute();
+
+    const raw = insertResult.raw as { changes?: number } | undefined;
+    const changes = Number(raw?.changes ?? 0);
+    const inserted = changes > 0 || (insertResult.identifiers?.length ?? 0) > 0;
+    if (!inserted) {
+      return;
+    }
+    this.structured.emit({
+      correlationId: payload.correlationId,
+      tenantId: payload.tenantId,
+      phase: String(command.phase),
+      state: `${command.transition.machine}:${command.transition.from}→${command.transition.to}`,
+      adapter: 'domain.events',
+      result: eventType,
+      surface: 'DOMAIN_EVENT',
+      message: `domain_event:${eventType}`,
+    });
+    this.eventStream?.emit({
+      occurredAt: new Date().toISOString(),
+      envelope: 'DOMAIN_EVENT',
+      tenantId: payload.tenantId.trim(),
+      correlationId: payload.correlationId.trim(),
+      eventType,
+      payload,
+    });
+  }
+
+  private async recordDerivedAccountTransitionIfApplicable(
+    command: SmekLoopCommand,
+    resolvedTransition: TransitionProposal,
+  ): Promise<void> {
+    const derived = this.toDerivedAccountTransition(resolvedTransition);
+    if (!derived) {
+      return;
+    }
+    try {
+      await this.stateMachine.recordValidatedTransition({
+        tenantId: resolvedTransition.tenantId,
+        correlationId: resolvedTransition.correlationId,
+        machine: MachineKind.ACCOUNT,
+        from: derived.from,
+        to: derived.to,
+        actor: command.transition.actor ?? 'smek.derived.account',
+        metadata: {
+          sourceMachine: resolvedTransition.machine,
+          sourceFrom: resolvedTransition.from,
+          sourceTo: resolvedTransition.to,
+        },
+      });
+      this.eventStream?.emit({
+        occurredAt: new Date().toISOString(),
+        envelope: 'STATE_TRANSITION',
+        tenantId: resolvedTransition.tenantId.trim(),
+        correlationId: resolvedTransition.correlationId.trim(),
+        machine: MachineKind.ACCOUNT,
+        from: derived.from,
+        to: derived.to,
+      });
+    } catch (err) {
+      this.structured.emit({
+        ...this.smekStructuredBase(command),
+        result: 'ACCOUNT_DERIVE_SKIPPED',
+        surface: 'SMEK',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private toDerivedAccountTransition(
+    t: TransitionProposal,
+  ): { from: string; to: string } | null {
+    if (t.machine === MachineKind.DATA && t.to === DataMachineState.COMPLETED) {
+      return { from: AccountMachineState.ACTIVE, to: AccountMachineState.IN_COLLECTIONS };
+    }
+    if (t.machine === MachineKind.CALL && t.to === CallMachineState.NEGOTIATING) {
+      return { from: AccountMachineState.IN_COLLECTIONS, to: AccountMachineState.NEGOTIATING };
+    }
+    if (t.machine === MachineKind.APPROVAL && t.to === ApprovalMachineState.APPROVED) {
+      return { from: AccountMachineState.NEGOTIATING, to: AccountMachineState.SETTLEMENT_ACCEPTED };
+    }
+    if (t.machine === MachineKind.PAYMENT && t.to === PaymentMachineState.PROCESSING) {
+      return {
+        from: AccountMachineState.SETTLEMENT_ACCEPTED,
+        to: AccountMachineState.PAYMENT_PENDING,
+      };
+    }
+    if (t.machine === MachineKind.PAYMENT && t.to === PaymentMachineState.SUCCESS) {
+      return { from: AccountMachineState.PAYMENT_PENDING, to: AccountMachineState.PAID };
+    }
+    if (t.machine === MachineKind.SYNC && t.to === SyncMachineState.COMPLETED) {
+      return { from: AccountMachineState.PAID, to: AccountMachineState.CLOSED };
+    }
+    return null;
   }
 
   private smekStructuredBase(command: SmekLoopCommand): {

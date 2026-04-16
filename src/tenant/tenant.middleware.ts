@@ -21,6 +21,12 @@ export class TenantMiddleware implements NestMiddleware {
       return;
     }
 
+    /** Infra probes — no tenant context (liveness/readiness). */
+    if (path === '/health' || path.startsWith('/health/') || path === '/live' || path === '/ready') {
+      next();
+      return;
+    }
+
     /** System-level production gates are global (not tenant-scoped). */
     if (path.startsWith('/system/')) {
       next();

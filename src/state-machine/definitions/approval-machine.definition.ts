@@ -22,7 +22,11 @@ const terminalStates = new Set<string>([
 const transitions = new Map<string, ReadonlySet<string>>([
   [
     ApprovalMachineState.REQUESTED,
-    new Set([ApprovalMachineState.PENDING, ApprovalMachineState.APPROVED]) as ReadonlySet<string>,
+    new Set([
+      ApprovalMachineState.PENDING,
+      ApprovalMachineState.APPROVED,
+      ApprovalMachineState.COUNTERED,
+    ]) as ReadonlySet<string>,
   ],
   [
     ApprovalMachineState.PENDING,
@@ -36,7 +40,11 @@ const transitions = new Map<string, ReadonlySet<string>>([
   ],
   [
     ApprovalMachineState.COUNTERED,
-    new Set([ApprovalMachineState.PENDING]) as ReadonlySet<string>,
+    new Set([
+      ApprovalMachineState.APPROVED,
+      ApprovalMachineState.REJECTED,
+      ApprovalMachineState.PENDING,
+    ]) as ReadonlySet<string>,
   ],
   [
     ApprovalMachineState.TIMEOUT,

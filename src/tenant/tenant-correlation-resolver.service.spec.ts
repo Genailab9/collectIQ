@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { TenantCorrelationResolverService } from './tenant-correlation-resolver.service';
+import { SystemQueryEngine } from './query-engines/system-query.engine';
 
 function makeConfig(mapJson?: string): ConfigService {
   return {
@@ -8,6 +9,15 @@ function makeConfig(mapJson?: string): ConfigService {
 }
 
 describe('TenantCorrelationResolverService', () => {
+  const makeScope = (qb: unknown): SystemQueryEngine =>
+    ({
+      query: async (
+        _repo: unknown,
+        _alias: string,
+        execute: (qb: unknown) => Promise<unknown>,
+      ) => execute(qb),
+    }) as unknown as SystemQueryEngine;
+
   it('returns null when distinct tenant count is not exactly 1', async () => {
     const getRawOne = jest.fn().mockResolvedValue({ cnt: '2', tenantId: 't1' });
     const qb = {
@@ -18,7 +28,7 @@ describe('TenantCorrelationResolverService', () => {
       getRawOne,
     };
     const repo = { createQueryBuilder: jest.fn().mockReturnValue(qb) } as never;
-    const svc = new TenantCorrelationResolverService(repo, makeConfig());
+    const svc = new TenantCorrelationResolverService(repo, makeConfig(), makeScope(qb));
     await expect(svc.resolveTenantIdForCorrelation('corr-1')).resolves.toBeNull();
   });
 
@@ -32,7 +42,7 @@ describe('TenantCorrelationResolverService', () => {
       getRawOne,
     };
     const repo = { createQueryBuilder: jest.fn().mockReturnValue(qb) } as never;
-    const svc = new TenantCorrelationResolverService(repo, makeConfig());
+    const svc = new TenantCorrelationResolverService(repo, makeConfig(), makeScope(qb));
     await expect(svc.resolveTenantIdForCorrelation('corr-1')).resolves.toBe('tenant-a');
   });
 
@@ -48,7 +58,7 @@ describe('TenantCorrelationResolverService', () => {
     };
     const repo = { createQueryBuilder: jest.fn().mockReturnValue(qb) } as never;
     const map = JSON.stringify({ AC123: 'acme' });
-    const svc = new TenantCorrelationResolverService(repo, makeConfig(map));
+    const svc = new TenantCorrelationResolverService(repo, makeConfig(map), makeScope(qb));
     await svc.resolveTenantIdForCorrelation('corr-1', { twilioAccountSid: 'AC123' });
     expect(andWhere).toHaveBeenCalledWith('t.tenantId = :narrowTenant', { narrowTenant: 'acme' });
   });

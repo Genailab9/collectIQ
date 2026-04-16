@@ -13,6 +13,7 @@ import {
   routeOfferAgainstBand,
 } from '../../modules/approval/approval-policy.rules';
 import type { ApprovalAdapter } from '../interfaces/approval-adapter.interface';
+import { ExecutionFeatureFlagsService } from '../../modules/tenant-feature-flags/execution-feature-flags.service';
 
 /**
  * PRD v1.1 §7.1 — policy evaluation runs only when SMEK invokes `evaluateApproval`.
@@ -23,6 +24,7 @@ export class CollectiqApprovalAdapter implements ApprovalAdapter {
   constructor(
     @InjectRepository(TenantApprovalPolicyEntity)
     private readonly policies: Repository<TenantApprovalPolicyEntity>,
+    private readonly executionFlags: ExecutionFeatureFlagsService,
   ) {}
 
   async evaluateApproval(input: {
@@ -39,6 +41,14 @@ export class CollectiqApprovalAdapter implements ApprovalAdapter {
     const policy = await this.policies.findOne({ where: { tenantId: input.tenantId } });
     if (!policy) {
       throw new ApprovalPolicyMissingError(input.tenantId);
+    }
+
+    if (await this.executionFlags.isJsonTruthy(input.tenantId, 'SIMULATE_APPROVAL_TIMEOUT')) {
+      return {
+        route: 'MANUAL_REVIEW',
+        toState: ApprovalMachineState.TIMEOUT,
+        escalationDeadlineAtIso: null,
+      };
     }
 
     assertOfferWithinTenantPolicyBounds(policy, input.offerAmountCents);

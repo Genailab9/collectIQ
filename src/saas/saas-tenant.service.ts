@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { AdminPlaneQuery } from './admin-plane-query.decorator';
 import { TenantSaaSProfileEntity, type SaaSPlan } from './entities/tenant-saas-profile.entity';
 
 @Injectable()
@@ -28,6 +29,7 @@ export class SaaSTenantService {
     return row;
   }
 
+  @AdminPlaneQuery()
   async listAll(): Promise<TenantSaaSProfileEntity[]> {
     return this.profiles.find({ order: { tenantId: 'ASC' } });
   }

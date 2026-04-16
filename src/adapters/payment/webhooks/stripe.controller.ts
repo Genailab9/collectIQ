@@ -19,10 +19,6 @@ export class StripeWebhookController {
     @Req() req: Request & { rawBody?: Buffer },
     @Body() body: Record<string, unknown>,
   ): Promise<{ ok: true }> {
-    const tenantId = String(req.header('x-collectiq-tenant-id') ?? '').trim();
-    if (!tenantId) {
-      throw new BadRequestException('Missing x-collectiq-tenant-id header.');
-    }
     const signature = req.header('stripe-signature') ?? '';
     const secret = this.config.getOrThrow<string>('STRIPE_WEBHOOK_SECRET');
     const event = stripeVerifier().webhooks.constructEvent(req.rawBody as Buffer, signature, secret);
@@ -35,6 +31,11 @@ export class StripeWebhookController {
       const gatewayPaymentIntentId = dataObject.id?.trim() ?? '';
       const providerStatus = typeof dataObject.status === 'string' ? dataObject.status : '';
       if (gatewayPaymentIntentId && providerStatus) {
+        const tenantId =
+          await this.stripeWebhooks.resolveTenantIdForGatewayPaymentIntentId(gatewayPaymentIntentId);
+        if (!tenantId) {
+          throw new BadRequestException('Unable to resolve tenant for Stripe payment_intent event.');
+        }
         await this.stripeWebhooks.handlePaymentIntentEvent({
           tenantId,
           eventId: event.id,
@@ -52,6 +53,11 @@ export class StripeWebhookController {
       const gatewayPaymentIntentId =
         typeof piRaw === 'string' ? piRaw.trim() : (piRaw?.id?.trim() ?? charge?.id?.trim() ?? '');
       if (gatewayPaymentIntentId) {
+        const tenantId =
+          await this.stripeWebhooks.resolveTenantIdForGatewayPaymentIntentId(gatewayPaymentIntentId);
+        if (!tenantId) {
+          throw new BadRequestException('Unable to resolve tenant for Stripe charge.refunded event.');
+        }
         await this.stripeWebhooks.handleChargeRefunded({
           tenantId,
           eventId: event.id,
@@ -68,6 +74,11 @@ export class StripeWebhookController {
       const gatewayPaymentIntentId =
         typeof piRaw === 'string' ? piRaw.trim() : (piRaw?.id?.trim() ?? '');
       if (gatewayPaymentIntentId) {
+        const tenantId =
+          await this.stripeWebhooks.resolveTenantIdForGatewayPaymentIntentId(gatewayPaymentIntentId);
+        if (!tenantId) {
+          throw new BadRequestException('Unable to resolve tenant for Stripe dispute event.');
+        }
         await this.stripeWebhooks.handleChargeDisputeCreated({
           tenantId,
           eventId: event.id,

@@ -47,7 +47,12 @@ const transitions = new Map<string, ReadonlySet<string>>([
   ],
   [
     CallMachineState.WAITING_APPROVAL,
-    new Set([CallMachineState.PAYMENT_PENDING, CallMachineState.FAILED, retryable]) as ReadonlySet<string>,
+    new Set([
+      CallMachineState.PAYMENT_PENDING,
+      CallMachineState.NEGOTIATING,
+      CallMachineState.FAILED,
+      retryable,
+    ]) as ReadonlySet<string>,
   ],
   [
     CallMachineState.PAYMENT_PENDING,

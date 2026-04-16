@@ -11,6 +11,10 @@ import { StateTransitionLogEntity } from '../../../state-machine/entities/state-
 import { MachineKind } from '../../../state-machine/types/machine-kind';
 import { WebhookEventService } from '../../telephony/webhooks/webhook-event.service';
 import { SaaSUsageService } from '../../../saas/saas-usage.service';
+import { TenantEventStreamService } from '../../../events/stream/tenant-event-stream.service';
+import { SyncService } from '../../../modules/sync/sync.service';
+import { PaymentTransitionQueryService } from '../../../modules/payment/payment-transition.query';
+import { tenantAls } from '../../../tenant/tenant-als';
 
 const STRIPE_PROVIDER = 'stripe';
 
@@ -23,9 +27,25 @@ export class StripeWebhookService {
     private readonly links: Repository<PaymentGatewayIntentLinkEntity>,
     @InjectRepository(StateTransitionLogEntity)
     private readonly transitions: Repository<StateTransitionLogEntity>,
+    private readonly syncService: SyncService,
+    private readonly paymentTransitions: PaymentTransitionQueryService,
     @Optional() private readonly saasUsage?: SaaSUsageService,
     @Optional() private readonly metrics?: PrometheusMetricsService,
+    @Optional() private readonly eventStream?: TenantEventStreamService,
   ) {}
+
+  async resolveTenantIdForGatewayPaymentIntentId(
+    gatewayPaymentIntentId: string,
+  ): Promise<string | null> {
+    const gid = gatewayPaymentIntentId.trim();
+    if (!gid) {
+      return null;
+    }
+    return tenantAls.run({ tenantId: 'system:webhook-tenant-resolve' }, async () => {
+      const row = await this.links.findOne({ where: { gatewayPaymentIntentId: gid } });
+      return row?.tenantId?.trim() || null;
+    });
+  }
 
   private incUnmapped(reason: string): void {
     try {
@@ -119,12 +139,39 @@ export class StripeWebhookService {
     if (result.outcome !== 'COMPLETED') {
       throw new ForbiddenException('Stripe webhook blocked by compliance.');
     }
+    const bootstrap = await this.paymentTransitions.getBootstrapMetadataForPayment(
+      link.tenantId,
+      link.paymentId,
+    );
+    if (!bootstrap) {
+      throw new ForbiddenException(
+        'Payment bootstrap metadata missing; cannot run settlement sync after webhook success.',
+      );
+    }
+    await this.syncService.runPostPaymentSettlementSync({
+      tenantId: link.tenantId,
+      paymentId: link.paymentId,
+      approvalCorrelationId: bootstrap.approvalCorrelationId,
+      idempotencyKey: `webhook:sync:${eventId}`,
+      borrowerOptedOut: false,
+    });
 
     await this.webhookEvents.markProcessed(tenantId, begin.event.id, {
       kind: 'stripe.payment_intent',
       outcome: 'COMPLETED',
       paymentId: link.paymentId,
       providerStatus,
+    });
+
+    this.eventStream?.emit({
+      occurredAt: new Date().toISOString(),
+      envelope: 'WEBHOOK_EVENT',
+      tenantId,
+      correlationId: link.paymentId,
+      provider: STRIPE_PROVIDER,
+      kind: 'stripe.payment_intent',
+      outcome: 'COMPLETED',
+      detail: { gatewayPaymentIntentId, providerStatus },
     });
 
     if (this.saasUsage) {
@@ -180,42 +227,11 @@ export class StripeWebhookService {
       this.incUnmapped('refund_bad_state');
       return;
     }
-    const result = await this.smekKernel.executeLoop({
-      phase: ExecutionLoopPhase.PAY,
-      transition: {
-        tenantId: link.tenantId,
-        correlationId: link.paymentId,
-        machine: MachineKind.PAYMENT,
-        from: PaymentMachineState.SUCCESS,
-        to: PaymentMachineState.REFUNDED,
-        actor: 'stripe-webhook',
-        metadata: {
-          provider: STRIPE_PROVIDER,
-          webhookEventId: eventId,
-          gatewayPaymentIntentId,
-          kind: 'charge.refunded',
-        },
-      },
-      adapterEnvelope: null,
-      complianceGate: {
-        tenantId: link.tenantId,
-        correlationId: link.paymentId,
-        executionPhase: ExecutionLoopPhase.PAY,
-        borrowerOptedOut: false,
-      },
-      paymentIngress: { source: 'GATEWAY_WEBHOOK' },
-      idempotency: {
-        key: `webhook:refund:${eventId}`,
-        step: IdempotencyStep.WebhookStripeRefund,
-      },
-    });
-    if (result.outcome !== 'COMPLETED') {
-      throw new ForbiddenException('Stripe refund webhook blocked by compliance.');
-    }
     await this.webhookEvents.markProcessed(tenantId, begin.event.id, {
       kind: 'stripe.charge.refunded',
-      outcome: 'COMPLETED',
+      outcome: 'IGNORED_PAYMENT_SUCCESS_TERMINAL',
       paymentId: link.paymentId,
+      fromState,
     });
   }
 
@@ -263,42 +279,11 @@ export class StripeWebhookService {
       this.incUnmapped('dispute_bad_state');
       return;
     }
-    const result = await this.smekKernel.executeLoop({
-      phase: ExecutionLoopPhase.PAY,
-      transition: {
-        tenantId: link.tenantId,
-        correlationId: link.paymentId,
-        machine: MachineKind.PAYMENT,
-        from: PaymentMachineState.SUCCESS,
-        to: PaymentMachineState.DISPUTED,
-        actor: 'stripe-webhook',
-        metadata: {
-          provider: STRIPE_PROVIDER,
-          webhookEventId: eventId,
-          gatewayPaymentIntentId,
-          kind: 'charge.dispute.created',
-        },
-      },
-      adapterEnvelope: null,
-      complianceGate: {
-        tenantId: link.tenantId,
-        correlationId: link.paymentId,
-        executionPhase: ExecutionLoopPhase.PAY,
-        borrowerOptedOut: false,
-      },
-      paymentIngress: { source: 'GATEWAY_WEBHOOK' },
-      idempotency: {
-        key: `webhook:dispute:${eventId}`,
-        step: IdempotencyStep.WebhookStripeDispute,
-      },
-    });
-    if (result.outcome !== 'COMPLETED') {
-      throw new ForbiddenException('Stripe dispute webhook blocked by compliance.');
-    }
     await this.webhookEvents.markProcessed(tenantId, begin.event.id, {
       kind: 'stripe.dispute.created',
-      outcome: 'COMPLETED',
+      outcome: 'IGNORED_PAYMENT_SUCCESS_TERMINAL',
       paymentId: link.paymentId,
+      fromState,
     });
   }
 
@@ -306,12 +291,13 @@ export class StripeWebhookService {
     tenantId: string,
     paymentId: string,
   ): Promise<StateTransitionLogEntity | null> {
-    return this.transitions
-      .createQueryBuilder('t')
-      .where('t.tenantId = :tenantId', { tenantId })
-      .andWhere('t.correlationId = :paymentId', { paymentId })
-      .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
-      .orderBy('t.occurredAt', 'DESC')
-      .getOne();
+    return this.transitions.findOne({
+      where: {
+        tenantId,
+        correlationId: paymentId,
+        machine: MachineKind.PAYMENT,
+      },
+      order: { occurredAt: 'DESC' },
+    });
   }
 }

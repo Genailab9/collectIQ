@@ -10,7 +10,7 @@ import { SyncMachineState } from '../../state-machine/definitions/sync-machine.d
 import { MachineKind } from '../../state-machine/types/machine-kind';
 import { SyncCaseSnapshotEntity } from './entities/sync-case-snapshot.entity';
 import { SyncStateConflictError } from './sync.errors';
-import { SyncTransitionQueryService } from './sync-transition-query.service';
+import { SyncTransitionQueryService } from './sync-transition.query';
 
 const TERMINAL = new Set<string>([SyncMachineState.COMPLETED]);
 

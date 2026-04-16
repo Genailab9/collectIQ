@@ -13,7 +13,12 @@ function makeMw(env: Record<string, string | undefined>) {
 describe('PrdSecurityMiddleware', () => {
   it('allows webhooks without API key', (done) => {
     const mw = makeMw({ COLLECTIQ_API_KEY: 'secret' });
-    const req = { method: 'POST', path: '/webhooks/telephony/twilio/voice/status', headers: {} } as Request;
+    const req = {
+      method: 'POST',
+      path: '/webhooks/telephony/twilio/voice/status',
+      headers: {},
+      header: () => undefined,
+    } as unknown as Request;
     const res = {} as Response;
     mw.use(req, res, ((err?: unknown) => {
       expect(err).toBeUndefined();
@@ -28,7 +33,8 @@ describe('PrdSecurityMiddleware', () => {
       path: '/payments/x',
       headers: {},
       secure: false,
-    } as Request;
+      header: () => undefined,
+    } as unknown as Request;
     const res = {} as Response;
     mw.use(req, res, ((err?: unknown) => {
       expect(err).toBeInstanceOf(ForbiddenException);

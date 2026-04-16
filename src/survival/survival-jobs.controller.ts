@@ -12,7 +12,7 @@ export class SurvivalJobsController {
   /** Tenant-scoped job visibility (queue depth is global in DB; recent rows filtered by tenant payloads when set). */
   @Get('summary')
   async summary() {
-    this.tenantContext.getRequired();
-    return this.jobs.summary();
+    const tenantId = this.tenantContext.getRequired();
+    return this.jobs.summary(tenantId);
   }
 }

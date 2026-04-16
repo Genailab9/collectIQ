@@ -11,7 +11,9 @@ import {
  * `external_dedupe_key` is an implementation extension for stable Twilio (and future) replay deduplication.
  */
 @Entity({ name: 'webhook_events' })
-@Index('webhook_events_provider_dedupe', ['provider', 'externalDedupeKey'], { unique: true })
+@Index('webhook_events_provider_tenant_dedupe', ['provider', 'tenantId', 'externalDedupeKey'], {
+  unique: true,
+})
 export class WebhookEventEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

@@ -8,6 +8,7 @@ import { SmekOrchestrationAuditEntity } from '../../kernel/entities/smek-orchest
 import { StateTransitionLogEntity } from '../../state-machine/entities/state-transition-log.entity';
 import { PaymentMachineState } from '../../state-machine/definitions/payment-machine.definition';
 import { MachineKind } from '../../state-machine/types/machine-kind';
+import { TenantQueryEngine } from '../../tenant/query-engines/tenant-query.engine';
 
 @Injectable()
 export class PaymentTransitionQueryService {
@@ -17,19 +18,20 @@ export class PaymentTransitionQueryService {
     @InjectRepository(SmekOrchestrationAuditEntity)
     private readonly audits: Repository<SmekOrchestrationAuditEntity>,
     private readonly atRestCipher: AtRestCipherService,
+    private readonly tenantQueryEngine: TenantQueryEngine,
   ) {}
 
   /**
    * Latest PAYMENT machine `toState` for a paymentId (stored as transition correlationId).
    */
   async getLatestPaymentToState(tenantId: string, paymentId: string): Promise<string | null> {
-    const row = await this.transitions
-      .createQueryBuilder('t')
-      .where('t.tenantId = :tenantId', { tenantId })
-      .andWhere('t.correlationId = :paymentId', { paymentId })
-      .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
-      .orderBy('t.occurredAt', 'DESC')
-      .getOne();
+    const row = await this.tenantQueryEngine.query(this.transitions, 't', tenantId, async (qb) =>
+      qb
+        .andWhere('t.correlationId = :paymentId', { paymentId })
+        .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
+        .orderBy('t.occurredAt', 'DESC')
+        .getOne(),
+    );
     return row?.toState ?? null;
   }
 
@@ -40,14 +42,14 @@ export class PaymentTransitionQueryService {
     tenantId: string,
     idempotencyKey: string,
   ): Promise<string | null> {
-    const row = await this.transitions
-      .createQueryBuilder('t')
-      .select('t.correlationId', 'correlationId')
-      .where('t.tenantId = :tenantId', { tenantId })
-      .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
-      .andWhere("json_extract(t.metadataJson, '$.idempotencyKey') = :ik", { ik: idempotencyKey })
-      .orderBy('t.occurredAt', 'ASC')
-      .getRawOne<{ correlationId: string }>();
+    const row = await this.tenantQueryEngine.query(this.transitions, 't', tenantId, async (qb) =>
+      qb
+        .select('t.correlationId', 'correlationId')
+        .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
+        .andWhere("json_extract(t.metadataJson, '$.idempotencyKey') = :ik", { ik: idempotencyKey })
+        .orderBy('t.occurredAt', 'ASC')
+        .getRawOne<{ correlationId: string }>(),
+    );
     return row?.correlationId ?? null;
   }
 
@@ -63,15 +65,15 @@ export class PaymentTransitionQueryService {
     currency: string;
     approvalCorrelationId: string;
   } | null> {
-    const row = await this.transitions
-      .createQueryBuilder('t')
-      .where('t.tenantId = :tenantId', { tenantId })
-      .andWhere('t.correlationId = :paymentId', { paymentId })
-      .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
-      .andWhere('t.fromState = :from', { from: PaymentMachineState.ALTERNATE_METHOD })
-      .andWhere('t.toState = :to', { to: PaymentMachineState.INITIATED })
-      .orderBy('t.occurredAt', 'ASC')
-      .getOne();
+    const row = await this.tenantQueryEngine.query(this.transitions, 't', tenantId, async (qb) =>
+      qb
+        .andWhere('t.correlationId = :paymentId', { paymentId })
+        .andWhere('t.machine = :machine', { machine: MachineKind.PAYMENT })
+        .andWhere('t.fromState = :from', { from: PaymentMachineState.ALTERNATE_METHOD })
+        .andWhere('t.toState = :to', { to: PaymentMachineState.INITIATED })
+        .orderBy('t.occurredAt', 'ASC')
+        .getOne(),
+    );
     if (!row?.metadataJson) {
       return null;
     }
@@ -102,14 +104,14 @@ export class PaymentTransitionQueryService {
   }
 
   async getLatestGatewayPaymentIntentId(tenantId: string, paymentId: string): Promise<string | null> {
-    const row = await this.audits
-      .createQueryBuilder('a')
-      .where('a.tenantId = :tenantId', { tenantId })
-      .andWhere('a.correlationId = :paymentId', { paymentId })
-      .andWhere('a.kind = :kind', { kind: SMEK_ORCHESTRATION_AUDIT_KIND.AdapterResult })
-      .andWhere('a.executionPhase = :phase', { phase: ExecutionLoopPhase.PAY })
-      .orderBy('a.createdAt', 'DESC')
-      .getOne();
+    const row = await this.tenantQueryEngine.query(this.audits, 'a', tenantId, async (qb) =>
+      qb
+        .andWhere('a.correlationId = :paymentId', { paymentId })
+        .andWhere('a.kind = :kind', { kind: SMEK_ORCHESTRATION_AUDIT_KIND.AdapterResult })
+        .andWhere('a.executionPhase = :phase', { phase: ExecutionLoopPhase.PAY })
+        .orderBy('a.createdAt', 'DESC')
+        .getOne(),
+    );
     if (!row) {
       return null;
     }

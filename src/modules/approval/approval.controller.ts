@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { TenantContextService } from '../../tenant/tenant-context.service';
 import { TransitionReadModelService } from '../read-model/transition-read-model.service';
+import { mapControllerError } from '../../lib/errors/error-mapper';
 import { OfficerDecisionDto, RegisterApprovalRequestDto } from './approval.dto';
 import { ApprovalService } from './approval.service';
 
@@ -23,7 +24,11 @@ export class ApprovalController {
   /** Read-model: APPROVAL queue (non-terminal awaiting officer). */
   @Get('pending')
   async pending() {
-    return this.readModel.listPendingApprovals(this.tenantContext.getRequired());
+    try {
+      return this.readModel.listPendingApprovals(this.tenantContext.getRequired());
+    } catch (error) {
+      throw mapControllerError(error);
+    }
   }
 
   /**
@@ -31,12 +36,16 @@ export class ApprovalController {
    */
   @Get(':correlationId/state')
   async getState(@Param('correlationId') correlationId: string) {
-    const t = this.tenantContext.getRequired();
-    const c = correlationId?.trim();
-    if (!c) {
-      throw new BadRequestException('correlationId is required.');
+    try {
+      const t = this.tenantContext.getRequired();
+      const c = correlationId?.trim();
+      if (!c) {
+        throw new BadRequestException('correlationId is required.');
+      }
+      return this.approvals.getState(t, c);
+    } catch (error) {
+      throw mapControllerError(error, { correlationId });
     }
-    return this.approvals.getState(t, c);
   }
 
   /**
@@ -45,13 +54,23 @@ export class ApprovalController {
   @Post('requests')
   @HttpCode(201)
   async registerRequest(@Body() body: RegisterApprovalRequestDto) {
-    return this.approvals.registerSettlementApprovalRequest({
-      tenantId: this.tenantContext.getRequired(),
-      correlationId: body.correlationId.trim(),
-      offerAmountCents: body.offerAmountCents,
-      idempotencyKey: body.idempotencyKey.trim(),
-      borrowerOptedOut: body.borrowerOptedOut,
-    });
+    const correlationId = body.correlationId?.trim() ?? body.correlationId;
+    try {
+      const correlation = body.correlationId?.trim() ?? '';
+      const idempotencyKey = body.idempotencyKey?.trim() ?? '';
+      if (!correlation || !idempotencyKey) {
+        throw new BadRequestException('correlationId and idempotencyKey are required.');
+      }
+      return await this.approvals.registerSettlementApprovalRequest({
+        tenantId: this.tenantContext.getRequired(),
+        correlationId: correlation,
+        offerAmountCents: body.offerAmountCents,
+        idempotencyKey,
+        borrowerOptedOut: body.borrowerOptedOut,
+      });
+    } catch (error) {
+      throw mapControllerError(error, { correlationId });
+    }
   }
 
   /**
@@ -63,13 +82,27 @@ export class ApprovalController {
     @Param('correlationId') correlationId: string,
     @Body() body: OfficerDecisionDto,
   ) {
-    return this.approvals.submitOfficerDecision({
-      tenantId: this.tenantContext.getRequired(),
-      correlationId: correlationId.trim(),
-      fromState: body.fromState.trim(),
-      decision: body.decision,
-      officerId: body.officerId.trim(),
-      idempotencyKey: body.idempotencyKey.trim(),
-    });
+    try {
+      const c = correlationId?.trim() ?? '';
+      const fromState = body.fromState?.trim() ?? '';
+      const officerId = body.officerId?.trim() ?? '';
+      const idempotencyKey = body.idempotencyKey?.trim() ?? '';
+      if (!c || !fromState || !officerId || !idempotencyKey) {
+        throw new BadRequestException(
+          'correlationId, fromState, officerId, and idempotencyKey are required.',
+        );
+      }
+      return await this.approvals.submitOfficerDecision({
+        tenantId: this.tenantContext.getRequired(),
+        correlationId: c,
+        fromState,
+        decision: body.decision,
+        officerId,
+        idempotencyKey,
+        counterOfferAmountCents: body.counterOfferAmountCents,
+      });
+    } catch (error) {
+      throw mapControllerError(error, { correlationId });
+    }
   }
 }

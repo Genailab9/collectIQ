@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'node:crypto';
 import { Repository } from 'typeorm';
@@ -10,7 +10,7 @@ import { SmekKernelService } from '../../kernel/smek-kernel.service';
 import { ApprovalMachineState } from '../../state-machine/definitions/approval-machine.definition';
 import { PaymentMachineState } from '../../state-machine/definitions/payment-machine.definition';
 import { MachineKind } from '../../state-machine/types/machine-kind';
-import { ApprovalTransitionQueryService } from '../approval/approval-transition-query.service';
+import { ApprovalTransitionQueryService } from '../approval/approval-transition.query';
 import { SyncService } from '../sync/sync.service';
 import { PaymentGatewayIntentLinkEntity } from './entities/payment-gateway-intent-link.entity';
 import {
@@ -20,15 +20,8 @@ import {
   PaymentIdempotencyRequiredError,
   PaymentStateConflictError,
 } from './payment.errors';
-import { PaymentTransitionQueryService } from './payment-transition-query.service';
+import { PaymentTransitionQueryService } from './payment-transition.query';
 import { PrometheusMetricsService } from '../../observability/prometheus-metrics.service';
-
-const TERMINAL = new Set<string>([
-  PaymentMachineState.SUCCESS,
-  PaymentMachineState.FAILED,
-  PaymentMachineState.REFUNDED,
-  PaymentMachineState.DISPUTED,
-]);
 
 function assertIdempotencyKeyPresent(raw: string | undefined | null): string {
   const k = raw?.trim() ?? '';

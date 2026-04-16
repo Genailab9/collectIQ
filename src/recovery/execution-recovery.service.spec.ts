@@ -13,7 +13,7 @@ import type { StateTransitionLogEntity } from '../state-machine/entities/state-t
 import type { MachineRegistryService } from '../state-machine/machine-registry.service';
 import { MachineKind } from '../state-machine/types/machine-kind';
 import type { SmekKernelService } from '../kernel/smek-kernel.service';
-import type { PaymentTransitionQueryService } from '../modules/payment/payment-transition-query.service';
+import type { PaymentTransitionQueryService } from '../modules/payment/payment-transition.query';
 import { ExecutionRecoveryService } from './execution-recovery.service';
 
 function makeQueryBuilderMock(rows: StateTransitionLogEntity[]) {

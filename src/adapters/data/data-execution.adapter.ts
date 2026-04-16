@@ -8,7 +8,7 @@ import { PiiEncryptionService } from '../../security/pii-encryption.service';
 import { DataIngestionRecordEntity } from '../../modules/ingestion/entities/data-ingestion-record.entity';
 
 @Injectable()
-export class DataExecutionBridge implements DataExecutionPort {
+export class DataExecutionAdapter implements DataExecutionPort {
   constructor(
     @InjectRepository(DataIngestionRecordEntity)
     private readonly records: Repository<DataIngestionRecordEntity>,

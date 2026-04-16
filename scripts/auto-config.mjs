@@ -35,6 +35,7 @@ const get = (k, fallback) => {
 
 const values = {
   NODE_ENV: get("NODE_ENV", () => "development"),
+  APP_BOOT_MODE: get("APP_BOOT_MODE", () => "demo-safe"),
   PORT: get("PORT", () => "3000"),
   NEXT_PUBLIC_APP_URL: get("NEXT_PUBLIC_APP_URL", () => "http://localhost:3001"),
   COLLECTIQ_API_KEYS: get("COLLECTIQ_API_KEYS", apiKey),
@@ -43,6 +44,12 @@ const values = {
   COLLECTIQ_REQUIRE_TLS: get("COLLECTIQ_REQUIRE_TLS", () => "false"),
   COLLECTIQ_TRUST_PROXY: get("COLLECTIQ_TRUST_PROXY", () => "true"),
   ALLOW_ENV_FALLBACK: get("ALLOW_ENV_FALLBACK", () => "true"),
+  STRIPE_SECRET_KEY: get("STRIPE_SECRET_KEY", () => ""),
+  STRIPE_WEBHOOK_SECRET: get("STRIPE_WEBHOOK_SECRET", () => ""),
+  TWILIO_ACCOUNT_SID: get("TWILIO_ACCOUNT_SID", () => ""),
+  TWILIO_AUTH_TOKEN: get("TWILIO_AUTH_TOKEN", () => ""),
+  OPENAI_API_KEY: get("OPENAI_API_KEY", () => ""),
+  PUBLIC_WEBHOOK_BASE_URL: get("PUBLIC_WEBHOOK_BASE_URL", () => "http://localhost:3000"),
 };
 
 const file = [
@@ -50,6 +57,7 @@ const file = [
   "# You can safely edit values after generation.",
   "",
   `NODE_ENV=${values.NODE_ENV}`,
+  `APP_BOOT_MODE=${values.APP_BOOT_MODE}`,
   `PORT=${values.PORT}`,
   `NEXT_PUBLIC_APP_URL=${values.NEXT_PUBLIC_APP_URL}`,
   "",
@@ -62,6 +70,14 @@ const file = [
   `COLLECTIQ_REQUIRE_TLS=${values.COLLECTIQ_REQUIRE_TLS}`,
   `COLLECTIQ_TRUST_PROXY=${values.COLLECTIQ_TRUST_PROXY}`,
   `ALLOW_ENV_FALLBACK=${values.ALLOW_ENV_FALLBACK}`,
+  "",
+  "# Optional external providers (leave blank for demo-safe mock mode)",
+  `STRIPE_SECRET_KEY=${values.STRIPE_SECRET_KEY}`,
+  `STRIPE_WEBHOOK_SECRET=${values.STRIPE_WEBHOOK_SECRET}`,
+  `TWILIO_ACCOUNT_SID=${values.TWILIO_ACCOUNT_SID}`,
+  `TWILIO_AUTH_TOKEN=${values.TWILIO_AUTH_TOKEN}`,
+  `OPENAI_API_KEY=${values.OPENAI_API_KEY}`,
+  `PUBLIC_WEBHOOK_BASE_URL=${values.PUBLIC_WEBHOOK_BASE_URL}`,
   "",
 ].join("\n");
 

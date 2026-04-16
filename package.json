@@ -4,7 +4,11 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "npm run lint:governance:contracts && npm run lint:eslint && npm run lint:governance:tenant && npm run lint:governance:runtime",
+    "lint:eslint": "eslint \"src/**/*.ts\"",
+    "lint:governance:contracts": "node scripts/compile-governance-contracts.mjs && node scripts/check-generated-governance-contracts.mjs && node scripts/check-invariants-contract.mjs && node scripts/check-slos-contract.mjs && node scripts/check-query-governance-lifecycle.mjs && node scripts/check-execution-endpoint-guards.mjs && node scripts/check-feature-flag-governance.mjs && node scripts/check-migration-compatibility.mjs && node scripts/check-operational-readiness.mjs",
+    "lint:governance:tenant": "node scripts/check-state-machine-writes.mjs && node scripts/check-tenant-query-scope.mjs && node scripts/check-query-engine-boundary.mjs && COLLECTIQ_QUERY_GOVERNANCE_MODE=enforce node scripts/check-global-query-governance.mjs && node scripts/check-saas-guardrails.mjs && node scripts/check-policy-governance.mjs && node scripts/check-admin-plane-queries.mjs",
+    "lint:governance:runtime": "node scripts/check-metrics-contract.mjs && node scripts/check-control-plane-events.mjs && node scripts/check-no-db-await-loops.mjs && node scripts/check-state-change-events.mjs && node scripts/check-testing-standards.mjs && node scripts/check-system-event-schema.mjs && node scripts/check-contract-route-coverage.mjs",
     "env:auto": "node scripts/auto-config.mjs",
     "test": "jest",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
@@ -13,7 +17,12 @@
     "start:prod": "node dist/main",
     "migration:run": "node ./node_modules/typeorm/cli-ts-node-commonjs.js migration:run -d src/database/collectiq-typeorm.datasource.ts",
     "migration:revert": "node ./node_modules/typeorm/cli-ts-node-commonjs.js migration:revert -d src/database/collectiq-typeorm.datasource.ts",
-    "migration:show": "node ./node_modules/typeorm/cli-ts-node-commonjs.js migration:show -d src/database/collectiq-typeorm.datasource.ts"
+    "migration:show": "node ./node_modules/typeorm/cli-ts-node-commonjs.js migration:show -d src/database/collectiq-typeorm.datasource.ts",
+    "backfill:domain-event-keys": "node -r ts-node/register src/cli/backfill-domain-event-keys.ts",
+    "chaos:test": "node scripts/chaos-test-pack.mjs",
+    "resilience:gate": "node -r ts-node/register src/cli/run-resilience-production-gate.ts",
+    "governance:summary": "node scripts/generate-governance-summary.mjs",
+    "allowlist:plan": "node scripts/generate-allowlist-execution-artifacts.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
@@ -24,6 +33,7 @@
     "@nestjs/typeorm": "^10.0.2",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "ioredis": "^5.4.2",
     "nodemailer": "^6.9.16",
     "openai": "^4.77.0",
     "pdfkit": "^0.15.0",

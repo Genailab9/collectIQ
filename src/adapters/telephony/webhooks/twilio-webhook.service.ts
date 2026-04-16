@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, Optional } from '@nestjs/common';
 import { IdempotencyStep } from '../../../contracts/idempotency-step';
 import { isSmekComplianceBlocked } from '../../../kernel/smek-kernel.dto';
 import type { SmekLoopComplianceBlockedResult } from '../../../kernel/smek-kernel.dto';
@@ -11,6 +11,7 @@ import { TwilioVoiceStatusToSmekMapper } from '../twilio/twilio-voice-status-to-
 import { TenantContextService } from '../../../tenant/tenant-context.service';
 import { TenantCorrelationResolverService } from '../../../tenant/tenant-correlation-resolver.service';
 import { WebhookEventService } from './webhook-event.service';
+import { TenantEventStreamService } from '../../../events/stream/tenant-event-stream.service';
 
 const TWILIO_PROVIDER = 'twilio';
 
@@ -40,6 +41,7 @@ export class TwilioWebhookService {
     private readonly smekKernel: SmekKernelService,
     private readonly tenantContext: TenantContextService,
     private readonly tenantCorrelationResolver: TenantCorrelationResolverService,
+    @Optional() private readonly eventStream?: TenantEventStreamService,
   ) {}
 
   /**
@@ -167,6 +169,17 @@ export class TwilioWebhookService {
     await this.webhookEvents.markProcessed(tenantId, begin.event.id, {
       kind: 'twilio.voice.status',
       outcome: 'COMPLETED',
+    });
+
+    this.eventStream?.emit({
+      occurredAt: new Date().toISOString(),
+      envelope: 'WEBHOOK_EVENT',
+      tenantId,
+      correlationId: params.correlationId,
+      provider: TWILIO_PROVIDER,
+      kind: 'twilio.voice.status',
+      outcome: 'COMPLETED',
+      detail: { callStatus },
     });
   }
 

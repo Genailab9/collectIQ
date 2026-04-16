@@ -9,22 +9,14 @@ export const PaymentMachineState = {
   FAILED: 'FAILED',
   RETRY: 'RETRY',
   ALTERNATE_METHOD: 'ALTERNATE_METHOD',
-  /** PRD Phase 4 — post-settlement refund (no duplicate financial success transition). */
-  REFUNDED: 'REFUNDED',
-  /** PRD Phase 4 — dispute opened after successful capture. */
-  DISPUTED: 'DISPUTED',
 } as const;
 
-const { INITIATED, PROCESSING, SUCCESS, FAILED, RETRY, ALTERNATE_METHOD, REFUNDED, DISPUTED } =
-  PaymentMachineState;
+const { INITIATED, PROCESSING, SUCCESS, FAILED, RETRY, ALTERNATE_METHOD } = PaymentMachineState;
 
 const states = new Set<string>(Object.values(PaymentMachineState));
 
-/**
- * REFUNDED / DISPUTED are strict terminals. SUCCESS is a business-complete hub that may still receive
- * provider-driven refund/dispute edges (see `ExecutionRecoveryService` — auto-recovery skips PAYMENT@SUCCESS).
- */
-const terminalStates = new Set<string>([REFUNDED, DISPUTED]);
+/** PRD v1.3 §7.3 — only SUCCESS is terminal in payment machine. */
+const terminalStates = new Set<string>([SUCCESS]);
 
 const transitions = new Map<string, ReadonlySet<string>>([
   [ALTERNATE_METHOD, new Set([INITIATED]) as ReadonlySet<string>],
@@ -35,7 +27,6 @@ const transitions = new Map<string, ReadonlySet<string>>([
   ],
   [FAILED, new Set([RETRY, ALTERNATE_METHOD]) as ReadonlySet<string>],
   [RETRY, new Set([PROCESSING]) as ReadonlySet<string>],
-  [SUCCESS, new Set([REFUNDED, DISPUTED]) as ReadonlySet<string>],
 ]);
 
 export const paymentMachineDefinition: MachineDefinition = {

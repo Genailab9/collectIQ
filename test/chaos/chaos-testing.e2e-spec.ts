@@ -188,14 +188,14 @@ describe('Chaos testing suite (e2e)', () => {
     const stripeWebhooks = nest().get(StripeWebhookService);
     const eventId = `evt_chaos_${randomUUID()}`;
 
-    await stripeWebhooks.handleEvent({
+    await stripeWebhooks.handlePaymentIntentEvent({
       tenantId: TENANT,
       eventId,
       gatewayPaymentIntentId: gatewayId,
       providerStatus: 'succeeded',
       rawPayload: { id: eventId, type: 'payment_intent.succeeded' },
     });
-    await stripeWebhooks.handleEvent({
+    await stripeWebhooks.handlePaymentIntentEvent({
       tenantId: TENANT,
       eventId,
       gatewayPaymentIntentId: gatewayId,

@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
+import { IdempotencyStep } from '../contracts/idempotency-step';
 import { TwilioWebhookService } from '../adapters/telephony/webhooks/twilio-webhook.service';
 import { AtRestCipherService } from '../data-lifecycle/at-rest-cipher.service';
 import { ExecutionLoopPhase } from '../contracts/execution-loop-phase';
-import { IdempotencyStep } from '../contracts/idempotency-step';
 import { PaymentCommandKind } from '../contracts/payment-command-kind';
 import { TelephonyCommandKind } from '../contracts/telephony-command-kind';
 import { SMEK_ORCHESTRATION_AUDIT_KIND } from '../kernel/smek-orchestration-audit.kinds';
@@ -14,13 +14,12 @@ import { SmekKernelService } from '../kernel/smek-kernel.service';
 import { requireSmekCompleted } from '../kernel/smek-loop-result.guard';
 import { PaymentGatewayIntentLinkEntity } from '../modules/payment/entities/payment-gateway-intent-link.entity';
 import { PaymentService } from '../modules/payment/payment.service';
-import { PaymentTransitionQueryService } from '../modules/payment/payment-transition-query.service';
 import { PaymentMachineState } from '../state-machine/definitions/payment-machine.definition';
-import { CallTransitionQueryService } from '../adapters/telephony/call-transition-query.service';
 import { StateTransitionLogEntity } from '../state-machine/entities/state-transition-log.entity';
 import { MachineKind } from '../state-machine/types/machine-kind';
 import { TenantContextService } from '../tenant/tenant-context.service';
 import { StructuredLoggerService } from '../observability/structured-logger.service';
+import { PrometheusMetricsService } from '../observability/prometheus-metrics.service';
 
 const DEFAULT_WEBHOOK_SILENCE_MINUTES = 3;
 
@@ -44,6 +43,7 @@ function normalizeTwilioStatus(status: string): string {
  */
 @Injectable()
 export class WebhookRecoveryService {
+  // LEGACY MIGRATION SURFACE: recovery queries use direct repository/query-builder/raw SQL while system-plane engine migration is in progress.
   private readonly logger = new Logger(WebhookRecoveryService.name);
   private readonly inFlight = new Set<string>();
 
@@ -55,14 +55,13 @@ export class WebhookRecoveryService {
     @InjectRepository(PaymentGatewayIntentLinkEntity)
     private readonly paymentIntentLinks: Repository<PaymentGatewayIntentLinkEntity>,
     private readonly atRestCipher: AtRestCipherService,
-    private readonly callTransitions: CallTransitionQueryService,
-    private readonly paymentTransitions: PaymentTransitionQueryService,
     private readonly smekKernel: SmekKernelService,
     private readonly payments: PaymentService,
     private readonly twilioWebhooks: TwilioWebhookService,
     private readonly tenantContext: TenantContextService,
     private readonly config: ConfigService,
     private readonly structured: StructuredLoggerService,
+    private readonly metrics: PrometheusMetricsService,
   ) {}
 
   /** Fallback sweep for active CALL / PAYMENT rows whose last transition is older than `cutoff`. */
@@ -76,7 +75,12 @@ export class WebhookRecoveryService {
   }
 
   private async recoverCalls(cutoff: Date, limit: number): Promise<void> {
+    const started = Date.now();
+    this.metrics.incWorkerRunsTotal('webhook_recovery', 'recover_calls');
     const rows = await this.findCallCorrelationStaleSince(cutoff, limit);
+    this.metrics.setWorkerBacklog('webhook_recovery', 'recover_calls', rows.length);
+    const latestStateByCase = await this.findLatestCallStateMap(rows);
+    const callSidByCase = await this.findLatestCallSidMap(rows);
     for (const row of rows) {
       const lockKey = `call:${row.tenantId}:${row.correlationId}`;
       if (this.inFlight.has(lockKey)) {
@@ -84,11 +88,11 @@ export class WebhookRecoveryService {
       }
       this.inFlight.add(lockKey);
       try {
-        const latest = await this.callTransitions.getLatestCallToState(row.tenantId, row.correlationId);
+        const latest = latestStateByCase.get(this.caseKey(row.tenantId, row.correlationId)) ?? null;
         if (!latest || this.isCallTerminal(latest)) {
           continue;
         }
-        const callSid = await this.findLatestCallSidFromAudit(row.tenantId, row.correlationId);
+        const callSid = callSidByCase.get(this.caseKey(row.tenantId, row.correlationId)) ?? null;
         if (!callSid) {
           this.logger.debug(
             `webhook.recovery.call_skip_no_callSid tenantId=${row.tenantId} correlationId=${row.correlationId}`,
@@ -161,6 +165,7 @@ export class WebhookRecoveryService {
           }
         });
       } catch (cause) {
+        this.metrics.incWorkerErrorsTotal('webhook_recovery', 'recover_calls', 'call_recovery_failed');
         this.logger.warn(
           `webhook.recovery.call_failed tenantId=${row.tenantId} correlationId=${row.correlationId} error=${String(cause)}`,
         );
@@ -168,10 +173,16 @@ export class WebhookRecoveryService {
         this.inFlight.delete(lockKey);
       }
     }
+    this.metrics.observeWorkerLatencyMs('webhook_recovery', 'recover_calls', Date.now() - started);
   }
 
   private async recoverPayments(cutoff: Date, limit: number): Promise<void> {
+    const started = Date.now();
+    this.metrics.incWorkerRunsTotal('webhook_recovery', 'recover_payments');
     const rows = await this.findPaymentCorrelationStaleSince(cutoff, limit);
+    this.metrics.setWorkerBacklog('webhook_recovery', 'recover_payments', rows.length);
+    const latestStateByPayment = await this.findLatestPaymentStateMap(rows);
+    const gatewayIntentByPayment = await this.findGatewayIntentIdMap(rows);
     for (const row of rows) {
       const lockKey = `pay:${row.tenantId}:${row.paymentId}`;
       if (this.inFlight.has(lockKey)) {
@@ -179,11 +190,11 @@ export class WebhookRecoveryService {
       }
       this.inFlight.add(lockKey);
       try {
-        const latest = await this.paymentTransitions.getLatestPaymentToState(row.tenantId, row.paymentId);
+        const latest = latestStateByPayment.get(this.caseKey(row.tenantId, row.paymentId)) ?? null;
         if (latest !== PaymentMachineState.PROCESSING) {
           continue;
         }
-        const gid = await this.resolveGatewayPaymentIntentId(row.tenantId, row.paymentId);
+        const gid = gatewayIntentByPayment.get(this.caseKey(row.tenantId, row.paymentId)) ?? null;
         if (!gid) {
           continue;
         }
@@ -205,6 +216,7 @@ export class WebhookRecoveryService {
           `webhook.recovery.payment_reconciled tenantId=${row.tenantId} paymentId=${row.paymentId} providerStatus=${out.status}`,
         );
       } catch (cause) {
+        this.metrics.incWorkerErrorsTotal('webhook_recovery', 'recover_payments', 'payment_recovery_failed');
         this.logger.warn(
           `webhook.recovery.payment_failed tenantId=${row.tenantId} paymentId=${row.paymentId} error=${String(cause)}`,
         );
@@ -212,6 +224,146 @@ export class WebhookRecoveryService {
         this.inFlight.delete(lockKey);
       }
     }
+    this.metrics.observeWorkerLatencyMs('webhook_recovery', 'recover_payments', Date.now() - started);
+  }
+
+  private caseKey(tenantId: string, correlationId: string): string {
+    return `${tenantId}::${correlationId}`;
+  }
+
+  private async findLatestCallStateMap(
+    rows: Array<{ readonly tenantId: string; readonly correlationId: string }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (rows.length === 0) {
+      return out;
+    }
+    const grouped = groupCorrelationRowsByTenant(rows);
+    for (const [tenantId, correlationIds] of grouped) {
+      const latestRows = await this.transitionLog.query(
+        `
+        SELECT tenantId, correlationId, toState
+        FROM (
+          SELECT tenantId, correlationId, to_state AS toState,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY tenantId, correlationId
+                   ORDER BY occurredAt DESC, id DESC
+                 ) AS rn
+          FROM state_transition_log
+          WHERE tenantId = ? AND machine = ? AND correlationId IN (${correlationIds.map(() => '?').join(',')})
+        ) t
+        WHERE t.rn = 1
+        `,
+        [tenantId, MachineKind.CALL, ...correlationIds],
+      );
+      for (const row of latestRows as Array<{ tenantId: string; correlationId: string; toState: string }>) {
+        if (row.toState) {
+          out.set(this.caseKey(row.tenantId, row.correlationId), row.toState);
+        }
+      }
+    }
+    return out;
+  }
+
+  private async findLatestCallSidMap(
+    rows: Array<{ readonly tenantId: string; readonly correlationId: string }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (rows.length === 0) {
+      return out;
+    }
+    const grouped = groupCorrelationRowsByTenant(rows);
+    for (const [tenantId, correlationIds] of grouped) {
+      const auditRows = await this.audits.query(
+        `
+        SELECT tenantId, correlationId, payloadJson
+        FROM (
+          SELECT tenantId, correlationId, payloadJson,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY tenantId, correlationId
+                   ORDER BY createdAt DESC, id DESC
+                 ) AS rn
+          FROM smek_orchestration_audit
+          WHERE tenantId = ? AND kind = ? AND executionPhase = ? AND correlationId IN (${correlationIds.map(() => '?').join(',')})
+        ) a
+        WHERE a.rn = 1
+        `,
+        [tenantId, SMEK_ORCHESTRATION_AUDIT_KIND.AdapterResult, ExecutionLoopPhase.CALL, ...correlationIds],
+      );
+      for (const row of auditRows as Array<{ tenantId: string; correlationId: string; payloadJson: string }>) {
+        if (!row.payloadJson) {
+          continue;
+        }
+        try {
+          const payload = JSON.parse(this.atRestCipher.openPayloadJson(row.payloadJson)) as {
+            adapterResult?: { callSid?: string };
+          };
+          const sid = payload.adapterResult?.callSid?.trim();
+          if (sid) {
+            out.set(this.caseKey(row.tenantId, row.correlationId), sid);
+          }
+        } catch {
+          // ignore malformed audit payload
+        }
+      }
+    }
+    return out;
+  }
+
+  private async findLatestPaymentStateMap(
+    rows: Array<{ readonly tenantId: string; readonly paymentId: string }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (rows.length === 0) {
+      return out;
+    }
+    const grouped = groupPaymentRowsByTenant(rows);
+    for (const [tenantId, paymentIds] of grouped) {
+      const latestRows = await this.transitionLog.query(
+        `
+        SELECT tenantId, correlationId AS paymentId, toState
+        FROM (
+          SELECT tenantId, correlationId, to_state AS toState,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY tenantId, correlationId
+                   ORDER BY occurredAt DESC, id DESC
+                 ) AS rn
+          FROM state_transition_log
+          WHERE tenantId = ? AND machine = ? AND correlationId IN (${paymentIds.map(() => '?').join(',')})
+        ) t
+        WHERE t.rn = 1
+        `,
+        [tenantId, MachineKind.PAYMENT, ...paymentIds],
+      );
+      for (const row of latestRows as Array<{ tenantId: string; paymentId: string; toState: string }>) {
+        if (row.toState) {
+          out.set(this.caseKey(row.tenantId, row.paymentId), row.toState);
+        }
+      }
+    }
+    return out;
+  }
+
+  private async findGatewayIntentIdMap(
+    rows: Array<{ readonly tenantId: string; readonly paymentId: string }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (rows.length === 0) {
+      return out;
+    }
+    const grouped = groupPaymentRowsByTenant(rows);
+    for (const [tenantId, paymentIds] of grouped) {
+      const links = await this.paymentIntentLinks.find({
+        where: { tenantId, paymentId: In(paymentIds) },
+        select: ['tenantId', 'paymentId', 'gatewayPaymentIntentId'],
+      });
+      for (const link of links) {
+        if (link.gatewayPaymentIntentId) {
+          out.set(this.caseKey(link.tenantId, link.paymentId), link.gatewayPaymentIntentId);
+        }
+      }
+    }
+    return out;
   }
 
   private isCallTerminal(state: string): boolean {
@@ -259,36 +411,6 @@ export class WebhookRecoveryService {
     return raw.map((r) => ({ tenantId: r.tenantId, paymentId: r.paymentId }));
   }
 
-  private async findLatestCallSidFromAudit(
-    tenantId: string,
-    correlationId: string,
-  ): Promise<string | null> {
-    const rows = await this.audits
-      .createQueryBuilder('a')
-      .where('a.tenantId = :tenantId', { tenantId })
-      .andWhere('a.correlationId = :correlationId', { correlationId })
-      .andWhere('a.kind = :kind', { kind: SMEK_ORCHESTRATION_AUDIT_KIND.AdapterResult })
-      .andWhere('a.executionPhase = :phase', { phase: ExecutionLoopPhase.CALL })
-      .orderBy('a.createdAt', 'DESC')
-      .take(25)
-      .getMany();
-
-    for (const row of rows) {
-      try {
-        const payload = JSON.parse(this.atRestCipher.openPayloadJson(row.payloadJson)) as {
-          adapterResult?: { callSid?: string; status?: string };
-        };
-        const sid = payload.adapterResult?.callSid?.trim();
-        if (sid) {
-          return sid;
-        }
-      } catch {
-        continue;
-      }
-    }
-    return null;
-  }
-
   private async getTelephonyStatusViaSmek(params: {
     tenantId: string;
     correlationId: string;
@@ -318,22 +440,14 @@ export class WebhookRecoveryService {
           executionPhase: ExecutionLoopPhase.CALL,
           borrowerOptedOut: false,
         },
+        idempotency: {
+          key: `recovery:poll:call:${params.tenantId}:${params.correlationId}:${params.callSid}`,
+          step: IdempotencyStep.WebhookRecoveryPoll,
+        },
       }),
       (m) => new Error(m),
     );
     return out.adapterResult as { status: string };
-  }
-
-  private async resolveGatewayPaymentIntentId(
-    tenantId: string,
-    paymentId: string,
-  ): Promise<string | null> {
-    const fromAudit = await this.paymentTransitions.getLatestGatewayPaymentIntentId(tenantId, paymentId);
-    if (fromAudit) {
-      return fromAudit;
-    }
-    const link = await this.paymentIntentLinks.findOne({ where: { tenantId, paymentId } });
-    return link?.gatewayPaymentIntentId ?? null;
   }
 
   private async getPaymentStatusViaSmek(params: {
@@ -364,6 +478,10 @@ export class WebhookRecoveryService {
           executionPhase: ExecutionLoopPhase.PAY,
           borrowerOptedOut: false,
         },
+        idempotency: {
+          key: `recovery:poll:payment:${params.tenantId}:${params.paymentId}:${params.gatewayPaymentIntentId}`,
+          step: IdempotencyStep.WebhookRecoveryPoll,
+        },
       }),
       (m) => new Error(m),
     );
@@ -388,4 +506,28 @@ export class WebhookRecoveryService {
 
 export function webhookRecoverySilenceMinutes(config: ConfigService): number {
   return parsePositiveInt(config.get<string>('WEBHOOK_RECOVERY_SILENCE_MINUTES'), DEFAULT_WEBHOOK_SILENCE_MINUTES);
+}
+
+function groupCorrelationRowsByTenant(
+  rows: Array<{ readonly tenantId: string; readonly correlationId: string }>,
+): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const row of rows) {
+    const tenantRows = grouped.get(row.tenantId) ?? [];
+    tenantRows.push(row.correlationId);
+    grouped.set(row.tenantId, tenantRows);
+  }
+  return grouped;
+}
+
+function groupPaymentRowsByTenant(
+  rows: Array<{ readonly tenantId: string; readonly paymentId: string }>,
+): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const row of rows) {
+    const tenantRows = grouped.get(row.tenantId) ?? [];
+    tenantRows.push(row.paymentId);
+    grouped.set(row.tenantId, tenantRows);
+  }
+  return grouped;
 }

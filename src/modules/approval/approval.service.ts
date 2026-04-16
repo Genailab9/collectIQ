@@ -1,13 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { CallTransitionQueryService } from '../../adapters/telephony/call-transition-query.service';
 import { IdempotencyStep } from '../../contracts/idempotency-step';
 import { ExecutionLoopPhase } from '../../contracts/execution-loop-phase';
 import { requireSmekCompleted } from '../../kernel/smek-loop-result.guard';
 import { SmekKernelService } from '../../kernel/smek-kernel.service';
 import { ApprovalMachineState } from '../../state-machine/definitions/approval-machine.definition';
+import { CallMachineState } from '../../state-machine/definitions/call-machine.definition';
 import { MachineKind } from '../../state-machine/types/machine-kind';
-import { ApprovalTransitionQueryService } from './approval-transition-query.service';
+import { ApprovalTransitionQueryService } from './approval-transition.query';
 import { computePendingDeadline } from './approval-policy.rules';
 import {
   ApprovalOfferInvalidError,
@@ -30,6 +32,7 @@ export class ApprovalService {
   constructor(
     private readonly smekKernel: SmekKernelService,
     private readonly approvalTransitions: ApprovalTransitionQueryService,
+    private readonly callTransitions: CallTransitionQueryService,
     @InjectRepository(TenantApprovalPolicyEntity)
     private readonly policies: Repository<TenantApprovalPolicyEntity>,
   ) {}
@@ -122,27 +125,42 @@ export class ApprovalService {
     officerId: string;
     idempotencyKey: string;
     borrowerOptedOut?: boolean;
+    counterOfferAmountCents?: number;
   }): Promise<{ toState: string }> {
     const latest = await this.approvalTransitions.getLatestApprovalToState(
       params.tenantId,
       params.correlationId,
     );
-    if (latest !== params.fromState) {
+    const fromState = normalizeApprovalState(params.fromState);
+    if (latest !== fromState) {
       throw new ApprovalTransitionNotAllowedError(
-        `fromState mismatch: expected "${params.fromState}" but latest is "${String(latest)}".`,
+        `fromState mismatch: expected "${fromState}" but latest is "${String(latest)}".`,
       );
     }
 
-    const toState = mapOfficerDecisionToTargetState(params.fromState, params.decision);
+    const toState = mapOfficerDecisionToTargetState(fromState, params.decision);
     if (!toState) {
       throw new ApprovalTransitionNotAllowedError(
-        `Decision "${params.decision}" is not permitted from "${params.fromState}".`,
+        `Decision "${params.decision}" is not permitted from "${fromState}".`,
       );
     }
 
     const metadata: Record<string, unknown> = {
       officerDecision: params.decision,
     };
+    if (params.decision === 'COUNTER') {
+      if (
+        !Number.isFinite(params.counterOfferAmountCents) ||
+        !Number.isInteger(params.counterOfferAmountCents) ||
+        (params.counterOfferAmountCents ?? 0) <= 0
+      ) {
+        throw new ApprovalOfferInvalidError(
+          'counterOfferAmountCents is required and must be a positive integer for COUNTER decisions.',
+        );
+      }
+      metadata.counterOfferAmountCents = params.counterOfferAmountCents;
+      metadata.offerAmountCents = params.counterOfferAmountCents;
+    }
     if (toState === ApprovalMachineState.PENDING) {
       const policy = await this.policies.findOne({ where: { tenantId: params.tenantId } });
       if (policy) {
@@ -177,6 +195,10 @@ export class ApprovalService {
       }),
       (m) => new ApprovalStateConflictError(m),
     );
+
+    if (toState === ApprovalMachineState.COUNTERED) {
+      await this.reopenNegotiationAfterCounter(params);
+    }
 
     return { toState };
   }
@@ -226,8 +248,53 @@ export class ApprovalService {
     );
   }
 
-  async findDueEscalations(limit = 50): Promise<{ tenantId: string; correlationId: string }[]> {
-    return this.approvalTransitions.findDueEscalations(new Date(), 8000, limit);
+  async listTenantsWithApprovalActivity(): Promise<string[]> {
+    return this.approvalTransitions.listTenantsWithApprovalActivity();
+  }
+
+  async findDueEscalationsForTenant(
+    tenantId: string,
+    limit = 50,
+  ): Promise<{ tenantId: string; correlationId: string }[]> {
+    return this.approvalTransitions.findDueEscalationsForTenant(tenantId, new Date(), 500, limit);
+  }
+  private async reopenNegotiationAfterCounter(params: {
+    tenantId: string;
+    correlationId: string;
+    idempotencyKey: string;
+    borrowerOptedOut?: boolean;
+  }): Promise<void> {
+    const latestCall = await this.callTransitions.getLatestCallToState(params.tenantId, params.correlationId);
+    if (latestCall !== CallMachineState.WAITING_APPROVAL) {
+      return;
+    }
+    requireSmekCompleted(
+      await this.smekKernel.executeLoop({
+        phase: ExecutionLoopPhase.CALL,
+        transition: {
+          tenantId: params.tenantId,
+          correlationId: params.correlationId,
+          machine: MachineKind.CALL,
+          from: CallMachineState.WAITING_APPROVAL,
+          to: CallMachineState.NEGOTIATING,
+          actor: 'approval.counter',
+          metadata: { source: 'officer_counter_offer' },
+        },
+        adapterEnvelope: null,
+        complianceGate: {
+          tenantId: params.tenantId,
+          correlationId: params.correlationId,
+          executionPhase: ExecutionLoopPhase.CALL,
+          borrowerOptedOut: params.borrowerOptedOut,
+        },
+        telephonyIngress: { source: 'INTERNAL_COUNTER_OFFER' },
+        idempotency: {
+          key: `${params.idempotencyKey}:counter-reopen`,
+          step: IdempotencyStep.ApprovalCounterReopenNegotiation,
+        },
+      }),
+      (m) => new ApprovalStateConflictError(m),
+    );
   }
 }
 
@@ -235,10 +302,21 @@ function mapOfficerDecisionToTargetState(
   fromState: string,
   decision: OfficerDecisionType,
 ): string | null {
+  if (fromState === ApprovalMachineState.REQUESTED) {
+    if (decision === 'APPROVE') return ApprovalMachineState.APPROVED;
+    if (decision === 'COUNTER') return ApprovalMachineState.COUNTERED;
+    return null;
+  }
   if (fromState === ApprovalMachineState.PENDING) {
     if (decision === 'APPROVE') return ApprovalMachineState.APPROVED;
     if (decision === 'REJECT') return ApprovalMachineState.REJECTED;
     if (decision === 'COUNTER') return ApprovalMachineState.COUNTERED;
+    return null;
+  }
+  if (fromState === ApprovalMachineState.COUNTERED) {
+    if (decision === 'APPROVE') return ApprovalMachineState.APPROVED;
+    if (decision === 'REJECT') return ApprovalMachineState.REJECTED;
+    if (decision === 'COUNTER') return ApprovalMachineState.PENDING;
     return null;
   }
   if (fromState === ApprovalMachineState.TIMEOUT || fromState === ApprovalMachineState.ESCALATED) {
@@ -248,4 +326,12 @@ function mapOfficerDecisionToTargetState(
     return null;
   }
   return null;
+}
+
+function normalizeApprovalState(raw: string): string {
+  const normalized = raw.trim().toUpperCase();
+  if (normalized === 'COUNTER') {
+    return ApprovalMachineState.COUNTERED;
+  }
+  return normalized;
 }

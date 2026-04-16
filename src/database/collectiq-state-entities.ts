@@ -15,6 +15,9 @@ import { SurvivalJobEntity } from '../survival/entities/survival-job.entity';
 import { TenantSealedCredentialEntity } from '../survival/entities/tenant-sealed-credential.entity';
 import { CampaignEntity } from '../modules/campaign/campaign.entity';
 import { TenantFeatureFlagEntity } from '../modules/tenant-feature-flags/tenant-feature-flag.entity';
+import { SystemEventProjectionEntity } from '../observability/entities/system-event-projection.entity';
+import { SystemEventIntegritySnapshotEntity } from '../observability/entities/system-event-integrity-snapshot.entity';
+import { SystemEventChainAnchorEntity } from '../observability/entities/system-event-chain-anchor.entity';
 
 /** Single TypeORM entity list for the CollectIQ state store (SQLite). PRD §17 — keep in sync with migrations. */
 export const COLLECTIQ_STATE_ENTITIES = [
@@ -35,4 +38,7 @@ export const COLLECTIQ_STATE_ENTITIES = [
   TenantSealedCredentialEntity,
   CampaignEntity,
   TenantFeatureFlagEntity,
+  SystemEventProjectionEntity,
+  SystemEventIntegritySnapshotEntity,
+  SystemEventChainAnchorEntity,
 ];

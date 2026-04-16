@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "controllers": [
+    {
+      "file": "src/modules/settlement-execution/settlement-execution.controller.ts",
+      "mustInclude": ["tenantContext.getRequired()", "idempotencyKey"]
+    },
+    {
+      "file": "src/modules/approval/approval.controller.ts",
+      "mustInclude": ["tenantContext.getRequired()", "idempotencyKey"]
+    },
+    {
+      "file": "src/modules/payment/payment.controller.ts",
+      "mustInclude": ["tenantContext.getRequired()", "idempotencyKey"]
+    },
+    {
+      "file": "src/adapters/payment/webhooks/stripe.controller.ts",
+      "mustInclude": ["StripeWebhookSignatureGuard", "resolveTenantIdForGatewayPaymentIntentId"],
+      "mustNotInclude": ["x-collectiq-tenant-id"]
+    },
+    {
+      "file": "src/adapters/telephony/webhooks/twilio-voice-status-webhook.controller.ts",
+      "mustInclude": ["TwilioWebhookSignatureGuard", "correlationId"],
+      "mustNotInclude": ["x-collectiq-tenant-id"]
+    }
+  ]
+}

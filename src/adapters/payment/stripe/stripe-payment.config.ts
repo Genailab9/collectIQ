@@ -5,7 +5,13 @@ import { ConfigService } from '@nestjs/config';
 export class StripePaymentConfig {
   constructor(private readonly config: ConfigService) {}
 
-  get secretKey(): string {
-    return this.config.getOrThrow<string>('STRIPE_SECRET_KEY');
+  get secretKey(): string | undefined {
+    const key = this.config.get<string>('STRIPE_SECRET_KEY')?.trim();
+    return key || undefined;
+  }
+
+  get bootMode(): 'strict' | 'demo-safe' {
+    const mode = this.config.get<string>('APP_BOOT_MODE')?.trim().toLowerCase();
+    return mode === 'strict' ? 'strict' : 'demo-safe';
   }
 }

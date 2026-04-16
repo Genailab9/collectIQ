@@ -10,6 +10,7 @@ export const IdempotencyStep = {
   SyncCompleted: 'sync.completed',
   ApprovalRegister: 'approval.register_request',
   ApprovalOfficerDecision: 'approval.officer_decision',
+  ApprovalCounterReopenNegotiation: 'approval.counter.reopen_negotiation',
   ApprovalEscalationTimer: 'approval.escalation_timer',
   WebhookTwilioVoiceStatus: 'webhook.twilio.voice_status',
   /** PRD §6.3 — provider poll recovery; one SMEK hop per (tenant, correlation, observed provider status). */
@@ -24,6 +25,8 @@ export const IdempotencyStep = {
   ExecutionCallSubmitForApproval: 'execution.call.submit_for_approval',
   /** PRD v1.3 — deterministic recovery when the log predates persisted SMEK idempotency metadata. */
   RecoveryDataComplete: 'recovery.data.complete',
+  /** One SMEK(CAMPAIGN) activation per persisted campaign row. */
+  CampaignActivate: 'campaign.activate',
 } as const;
 
 export type IdempotencyStep = (typeof IdempotencyStep)[keyof typeof IdempotencyStep];

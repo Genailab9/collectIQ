@@ -23,6 +23,9 @@ export class TelephonyExecutionBridge implements TelephonyExecutionPort {
     switch (envelope.kind) {
       case TelephonyCommandKind.InitiateCall: {
         const body = envelope.body as InitiateCallInput;
+        if (await this.executionFlags.isJsonTruthy(body.tenantId, 'SIMULATE_CALL_FAILURE')) {
+          throw new Error('SIMULATE_CALL_FAILURE');
+        }
         if (await this.executionFlags.isJsonTruthy(body.tenantId, 'DEMO_MODE')) {
           return { callSid: `CA_DEMO_${body.correlationId}`, status: 'queued' };
         }

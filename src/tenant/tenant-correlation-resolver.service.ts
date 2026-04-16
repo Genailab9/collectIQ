@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { StateTransitionLogEntity } from '../state-machine/entities/state-transition-log.entity';
+import { SystemQueryEngine } from './query-engines/system-query.engine';
 
 export interface ResolveTenantForCorrelationOptions {
   /**
@@ -22,6 +23,7 @@ export class TenantCorrelationResolverService {
     @InjectRepository(StateTransitionLogEntity)
     private readonly transitions: Repository<StateTransitionLogEntity>,
     private readonly config: ConfigService,
+    private readonly systemQueryEngine: SystemQueryEngine,
   ) {}
 
   async resolveTenantIdForCorrelation(
@@ -35,17 +37,17 @@ export class TenantCorrelationResolverService {
 
     const narrowTenant = this.resolveNarrowTenantFromTwilioAccountSid(options?.twilioAccountSid);
 
-    const qb = this.transitions
-      .createQueryBuilder('t')
-      .select('COUNT(DISTINCT t.tenantId)', 'cnt')
-      .addSelect('MIN(t.tenantId)', 'tenantId')
-      .where('t.correlationId = :correlationId', { correlationId: c });
+    const row = await this.systemQueryEngine.query(this.transitions, 't', async (qb) => {
+      qb
+        .select('COUNT(DISTINCT t.tenantId)', 'cnt')
+        .addSelect('MIN(t.tenantId)', 'tenantId')
+        .where('t.correlationId = :correlationId', { correlationId: c });
 
-    if (narrowTenant) {
-      qb.andWhere('t.tenantId = :narrowTenant', { narrowTenant });
-    }
-
-    const row = await qb.getRawOne<{ cnt: string; tenantId: string | null }>();
+      if (narrowTenant) {
+        qb.andWhere('t.tenantId = :narrowTenant', { narrowTenant });
+      }
+      return qb.getRawOne<{ cnt: string; tenantId: string | null }>();
+    });
     if (!row?.tenantId) {
       return null;
     }

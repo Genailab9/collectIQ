@@ -69,12 +69,16 @@ export class IdempotencyService {
     }
 
     if (existing.status === 'failed') {
-      existing.status = 'pending';
-      existing.correlationId = c;
-      existing.responsePayloadJson = null;
-      existing.responseHash = null;
-      const saved = await this.rows.save(existing);
-      return { mode: 'proceed', rowId: saved.id };
+      await this.rows.update(
+        { tenantId: t, id: existing.id },
+        {
+          status: 'pending',
+          correlationId: c,
+          responsePayloadJson: null,
+          responseHash: null,
+        },
+      );
+      return { mode: 'proceed', rowId: existing.id };
     }
 
     throw new Error(`Unexpected idempotency row status "${String(existing.status)}".`);
@@ -90,10 +94,14 @@ export class IdempotencyService {
       return;
     }
     const payloadJson = JSON.stringify(result);
-    row.status = 'success';
-    row.responsePayloadJson = payloadJson;
-    row.responseHash = this.hashPayload(payloadJson);
-    await this.rows.save(row);
+    await this.rows.update(
+      { tenantId: tenantId.trim(), id: row.id },
+      {
+        status: 'success',
+        responsePayloadJson: payloadJson,
+        responseHash: this.hashPayload(payloadJson),
+      },
+    );
   }
 
   /** Marks row failed so the same key+step may be retried (PRD v1.2 §2.4). */

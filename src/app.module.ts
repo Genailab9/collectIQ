@@ -43,6 +43,9 @@ import { SaaSTenantStatusMiddleware } from './saas/saas-tenant-status.middleware
 import { SaaSUsageMiddleware } from './saas/saas-usage.middleware';
 import { validateEnv } from './config/env.validation';
 import { HealthModule } from './modules/health/health.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
+import { SystemSimulationModule } from './modules/system-simulation/system-simulation.module';
+import { RuntimeProofMiddleware } from './runtime-proof/runtime-proof.middleware';
 
 /**
  * Single application root. Execution semantics:
@@ -118,6 +121,8 @@ import { HealthModule } from './modules/health/health.module';
     TenantFeatureFlagModule,
     DemoModule,
     HealthModule,
+    AnalyticsModule,
+    SystemSimulationModule,
     RecoveryModule,
     SaaSCoreModule,
     SaaSAdminModule,
@@ -127,6 +132,11 @@ import { HealthModule } from './modules/health/health.module';
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(RuntimeProofMiddleware)
+      .exclude({ path: '*', method: RequestMethod.OPTIONS })
+      .forRoutes({ path: '*', method: RequestMethod.ALL });
+
     consumer
       .apply(PrdSecurityMiddleware)
       .exclude({ path: '*', method: RequestMethod.OPTIONS })

@@ -7,7 +7,8 @@ import type { TransitionProposal } from '../state-machine/types/transition-propo
 export type TelephonyIngressSource =
   | 'TWILIO_VOICE_STATUS'
   | 'INTERNAL_AUTH_CHECKPOINT'
-  | 'INTERNAL_NEGOTIATION_COMPLETE';
+  | 'INTERNAL_NEGOTIATION_COMPLETE'
+  | 'INTERNAL_COUNTER_OFFER';
 
 export interface TelephonyIngressContext {
   readonly source: TelephonyIngressSource;

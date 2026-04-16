@@ -71,7 +71,7 @@ describe('PrdResilienceValidityService', () => {
       config,
     );
 
-    const out = await svc.runProductionGate();
+    const out = await svc.runProductionGate({ actor: 'system' });
     expect(out.result).toBe('PASS');
     expect(out.checks.every((c) => c.status === 'PASS')).toBe(true);
   });
@@ -107,7 +107,7 @@ describe('PrdResilienceValidityService', () => {
       config,
     );
 
-    const out = await svc.runProductionGate();
+    const out = await svc.runProductionGate({ actor: 'system' });
     expect(out.result).toBe('FAIL');
     expect(out.checks.find((c) => c.name === 'NO_DUPLICATE_PAYMENTS')?.status).toBe('FAIL');
   });

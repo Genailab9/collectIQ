@@ -7,6 +7,7 @@ import {
 import type { Request } from 'express';
 import { TwilioSignatureVerifier } from '../twilio/twilio-signature.verifier';
 import { TwilioTelephonyConfig } from '../twilio/twilio-telephony.config';
+import { emitRuntimeProof } from '../../../runtime-proof/runtime-proof-emitter';
 
 /**
  * PRD §16 — Twilio webhook authenticity: HMAC-SHA1 over the public callback URL + POST body using the auth token from env
@@ -18,25 +19,57 @@ export class TwilioWebhookSignatureGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
+    const authToken = this.twilioCfg.authToken;
+    const webhookBase = this.twilioCfg.webhookPublicBaseUrl;
+    if ((!authToken || !webhookBase) && this.twilioCfg.bootMode === 'demo-safe') {
+      return true;
+    }
     const signature = req.header('x-twilio-signature');
     if (!signature) {
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: 'n/a',
+        metadata: { path: req.path, method: req.method, reason: 'twilio_signature_missing' },
+      });
       throw new UnauthorizedException('Missing Twilio signature header.');
     }
+    if (!authToken || !webhookBase) {
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: 'n/a',
+        metadata: { path: req.path, method: req.method, reason: 'twilio_credentials_missing' },
+      });
+      throw new UnauthorizedException('Twilio webhook credentials are not configured.');
+    }
 
-    const fullUrl = `${this.twilioCfg.webhookPublicBaseUrl}${req.originalUrl}`;
+    const fullUrl = `${webhookBase}${req.originalUrl}`;
     const formBody = coerceFormBody(req.body);
 
     const ok = TwilioSignatureVerifier.verify({
-      authToken: this.twilioCfg.authToken,
+      authToken,
       signature,
       fullUrl,
       formBody,
     });
 
     if (!ok) {
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: 'n/a',
+        metadata: { path: req.path, method: req.method, reason: 'twilio_signature_invalid' },
+      });
       throw new UnauthorizedException('Invalid Twilio signature.');
     }
 
+    emitRuntimeProof({
+      requirement_id: 'REQ-SEC-002',
+      event_type: 'AUTH_EVENT',
+      tenant_id: 'n/a',
+      metadata: { path: req.path, method: req.method, result: 'twilio_signature_verified' },
+    });
     return true;
   }
 }

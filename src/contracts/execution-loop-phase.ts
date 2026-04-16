@@ -10,4 +10,6 @@ export enum ExecutionLoopPhase {
   APPROVE = 'APPROVE',
   PAY = 'PAY',
   SYNC = 'SYNC',
+  /** Campaign lifecycle (CAMPAIGN machine); no outbound adapter — compliance + transition log only. */
+  CAMPAIGN = 'CAMPAIGN',
 }

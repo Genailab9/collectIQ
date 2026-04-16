@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { SmekOrchestrationAuditEntity } from '../../kernel/entities/smek-orchestration-audit.entity';
 import { SMEK_ORCHESTRATION_AUDIT_KIND } from '../../kernel/smek-orchestration-audit.kinds';
 import { DataIngestionRecordEntity } from '../ingestion/entities/data-ingestion-record.entity';
 import { PaymentMachineState } from '../../state-machine/definitions/payment-machine.definition';
 import { MachineKind } from '../../state-machine/types/machine-kind';
+import { CallMachineState } from '../../state-machine/definitions/call-machine.definition';
+import { ApprovalMachineState } from '../../state-machine/definitions/approval-machine.definition';
 import { StateTransitionLogEntity } from '../../state-machine/entities/state-transition-log.entity';
 import { SyncMachineState } from '../../state-machine/definitions/sync-machine.definition';
 import { PiiEncryptionService } from '../../security/pii-encryption.service';
@@ -24,6 +26,7 @@ function safeJson(raw: string | null): Record<string, unknown> | null {
 
 @Injectable()
 export class TransitionReadModelService {
+  // LEGACY MIGRATION SURFACE: read-model access still relies on direct repository/query-builder usage during staged modernization.
   constructor(
     @InjectRepository(StateTransitionLogEntity)
     private readonly transitions: Repository<StateTransitionLogEntity>,
@@ -49,30 +52,31 @@ export class TransitionReadModelService {
   > {
     const t = tenantId.trim();
     const sql = `
-      SELECT correlationId, toState AS st
+      SELECT correlationId, to_state AS st
       FROM (
-        SELECT correlationId, toState,
+        SELECT correlationId, to_state,
           ROW_NUMBER() OVER (PARTITION BY correlationId ORDER BY occurredAt DESC, id DESC) rn
         FROM state_transition_log
         WHERE tenantId = ? AND machine = ?
       ) x
-      WHERE rn = 1 AND st IN ('PENDING','REQUESTED','COUNTERED','TIMEOUT','ESCALATED')
+      WHERE rn = 1 AND st IN ('PENDING','REQUESTED','COUNTER','COUNTERED','TIMEOUT','ESCALATED')
     `;
     const rows = (await this.transitions.query(sql, [t, MachineKind.APPROVAL])) as Array<{
       correlationId: string;
       st: string;
     }>;
+    const correlationIds = rows.map((r) => r.correlationId);
+    const borrowerByCorrelation = await this.borrowerSnapshotsBatch(t, correlationIds);
+    const negotiatedAmountByCorrelation = await this.negotiatedAmountsBatch(t, correlationIds);
+    const priorityByCorrelation = await this.prioritiesFromDataBatch(t, correlationIds);
     const out: Awaited<ReturnType<TransitionReadModelService['listPendingApprovals']>> = [];
     for (const r of rows) {
-      const borrower = await this.borrowerSnapshot(t, r.correlationId);
-      const negotiatedAmountCents = await this.negotiatedAmountCents(t, r.correlationId);
-      const priority = await this.priorityFromData(t, r.correlationId);
       out.push({
         correlationId: r.correlationId,
         tenantId: t,
-        borrower,
-        negotiatedAmountCents,
-        priority,
+        borrower: borrowerByCorrelation.get(r.correlationId) ?? {},
+        negotiatedAmountCents: negotiatedAmountByCorrelation.get(r.correlationId) ?? null,
+        priority: priorityByCorrelation.get(r.correlationId) ?? null,
         currentState: r.st,
         queueStage: 'WAITING_APPROVAL',
       });
@@ -96,7 +100,7 @@ export class TransitionReadModelService {
       WHERE s.tenantId = ?
       AND s.correlationId NOT IN (
         SELECT correlationId FROM (
-          SELECT correlationId, toState AS ts,
+          SELECT correlationId, to_state AS ts,
             ROW_NUMBER() OVER (PARTITION BY correlationId ORDER BY occurredAt DESC, id DESC) rn
           FROM state_transition_log
           WHERE tenantId = ? AND machine = ?
@@ -106,13 +110,15 @@ export class TransitionReadModelService {
     const ids = (await this.transitions.query(sql, [t, t, MachineKind.SYNC, SyncMachineState.COMPLETED])) as Array<{
       correlationId: string;
     }>;
+    const correlationIds = ids.map((x) => x.correlationId);
+    if (correlationIds.length === 0) {
+      return [];
+    }
+    const recentTransitionsByCorrelation = await this.latestTransitionsBatch(t, correlationIds, 20);
+    const campaignByCorrelation = await this.campaignIdsBatch(t, correlationIds);
     const result: Awaited<ReturnType<TransitionReadModelService['listActiveExecutions']>> = [];
-    for (const { correlationId } of ids) {
-      const latestRows = await this.transitions.find({
-        where: { tenantId: t, correlationId },
-        order: { occurredAt: 'DESC', id: 'DESC' },
-        take: 20,
-      });
+    for (const correlationId of correlationIds) {
+      const latestRows = recentTransitionsByCorrelation.get(correlationId) ?? [];
       if (latestRows.length === 0) {
         continue;
       }
@@ -125,13 +131,12 @@ export class TransitionReadModelService {
       }
       const phase = last.machine;
       const summary = [...byMachine.entries()].map(([m, s]) => `${m}:${s}`).join('|');
-      const campaignId = await this.campaignIdForCase(t, correlationId);
       result.push({
         correlationId,
         currentPhase: phase,
         currentStateSummary: summary,
         lastUpdatedAt: last.occurredAt.toISOString(),
-        campaignId,
+        campaignId: campaignByCorrelation.get(correlationId) ?? null,
       });
     }
     return result;
@@ -147,9 +152,9 @@ export class TransitionReadModelService {
   > {
     const t = tenantId.trim();
     const sql = `
-      SELECT correlationId AS paymentId, toState AS st
+      SELECT correlationId AS paymentId, to_state AS st
       FROM (
-        SELECT correlationId, toState,
+        SELECT correlationId, to_state,
           ROW_NUMBER() OVER (PARTITION BY correlationId ORDER BY occurredAt DESC, id DESC) rn
         FROM state_transition_log
         WHERE tenantId = ? AND machine = ?
@@ -162,13 +167,14 @@ export class TransitionReadModelService {
       PaymentMachineState.INITIATED,
       PaymentMachineState.PROCESSING,
     ])) as Array<{ paymentId: string; st: string }>;
+    const paymentIds = rows.map((r) => r.paymentId);
+    const amountByPaymentId = await this.paymentAmountsBatch(t, paymentIds);
     const out: Awaited<ReturnType<TransitionReadModelService['listPendingPayments']>> = [];
     for (const r of rows) {
-      const amountCents = await this.paymentAmountCents(t, r.paymentId);
       out.push({
         correlationId: r.paymentId,
         paymentId: r.paymentId,
-        amountCents,
+        amountCents: amountByPaymentId.get(r.paymentId) ?? null,
         currentState: r.st,
       });
     }
@@ -208,18 +214,14 @@ export class TransitionReadModelService {
       .getRawOne<{ c: string }>();
     const dataCompletedCases = Number.parseInt(dataDone?.c ?? '0', 10) || 0;
 
-    const transitionsForAmount = await this.transitions.find({
-      where: { tenantId: t, machine: MachineKind.PAYMENT, toState: PaymentMachineState.SUCCESS },
-      select: ['metadataJson'],
-    });
-    let collectedAmountCents = 0;
-    for (const row of transitionsForAmount) {
-      const meta = safeJson(row.metadataJson);
-      const n = meta?.amountCents;
-      if (typeof n === 'number' && Number.isFinite(n)) {
-        collectedAmountCents += n;
-      }
-    }
+    const amountRow = await this.transitions
+      .createQueryBuilder('x')
+      .select("COALESCE(SUM(CAST(json_extract(x.metadataJson, '$.amountCents') AS INTEGER)), 0)", 'sumAmount')
+      .where('x.tenantId = :t', { t })
+      .andWhere('x.machine = :m', { m: MachineKind.PAYMENT })
+      .andWhere('x.toState = :ok', { ok: PaymentMachineState.SUCCESS })
+      .getRawOne<{ sumAmount: string | number | null }>();
+    const collectedAmountCents = Number(amountRow?.sumAmount ?? 0) || 0;
 
     const resolutionSql = `
       SELECT AVG((strftime('%s', mx) - strftime('%s', mn)) * 1000) AS avgMs
@@ -256,6 +258,152 @@ export class TransitionReadModelService {
       avgResolutionTimeMs,
       approvalRate: hadApproval > 0 ? (approvedCases / hadApproval) * 100 : 0,
     };
+  }
+
+  async listExecutionRetries(
+    tenantId: string,
+    opts?: { limit?: number; offset?: number },
+  ): Promise<
+    Array<{
+      correlationId: string;
+      failureReason: string;
+      lastState: string;
+      retryCount: number;
+    }>
+  > {
+    const t = tenantId.trim();
+    const limit = Math.min(Math.max(opts?.limit ?? 500, 1), 500);
+    const offset = Math.max(opts?.offset ?? 0, 0);
+    const sql = `
+WITH open_cases AS (
+  SELECT correlationId FROM (
+    SELECT correlationId, to_state AS ts,
+      ROW_NUMBER() OVER (PARTITION BY correlationId ORDER BY occurredAt DESC, id DESC) rn
+    FROM state_transition_log
+    WHERE tenantId = ? AND machine = ?
+  ) x WHERE rn = 1 AND ts != ?
+),
+latest AS (
+  SELECT s.correlationId, s.machine, s.to_state AS ts,
+    ROW_NUMBER() OVER (PARTITION BY s.correlationId, s.machine ORDER BY s.occurredAt DESC, s.id DESC) rn
+  FROM state_transition_log s
+  INNER JOIN open_cases o ON o.correlationId = s.correlationId
+  WHERE s.tenantId = ?
+),
+hit AS (
+  SELECT correlationId, machine, ts,
+    CASE
+      WHEN machine = ? AND ts IN (?, ?) THEN machine || ':' || ts
+      WHEN machine = ? AND ts IN (?, ?) THEN machine || ':' || ts
+      WHEN machine = ? AND ts = ? THEN machine || ':' || ts
+      ELSE NULL
+    END AS failureReason,
+    machine || ':' || ts AS lastState
+  FROM latest
+  WHERE rn = 1
+),
+filtered AS (
+  SELECT * FROM hit WHERE failureReason IS NOT NULL
+)
+SELECT f.correlationId,
+       f.failureReason,
+       f.lastState,
+       IFNULL((
+         SELECT COUNT(*) FROM state_transition_log x
+         WHERE x.tenantId = ? AND x.correlationId = f.correlationId
+           AND x.machine = ? AND x.to_state = ?
+       ), 0)
+       + IFNULL((
+         SELECT COUNT(*) FROM state_transition_log x
+         WHERE x.tenantId = ? AND x.correlationId = f.correlationId
+           AND x.machine = ? AND x.to_state = ?
+       ), 0) AS retryCount
+FROM filtered f
+ORDER BY f.correlationId DESC
+LIMIT ? OFFSET ?
+    `;
+    const rows = (await this.transitions.query(sql, [
+      t,
+      MachineKind.SYNC,
+      SyncMachineState.COMPLETED,
+      t,
+      MachineKind.CALL,
+      CallMachineState.FAILED,
+      CallMachineState.RETRY_SCHEDULED,
+      MachineKind.PAYMENT,
+      PaymentMachineState.FAILED,
+      PaymentMachineState.RETRY,
+      MachineKind.APPROVAL,
+      ApprovalMachineState.TIMEOUT,
+      t,
+      MachineKind.CALL,
+      CallMachineState.RETRY_SCHEDULED,
+      t,
+      MachineKind.PAYMENT,
+      PaymentMachineState.RETRY,
+      limit,
+      offset,
+    ])) as Array<{
+      correlationId: string;
+      failureReason: string;
+      lastState: string;
+      retryCount: number | string;
+    }>;
+    return rows.map((r) => ({
+      correlationId: r.correlationId,
+      failureReason: r.failureReason,
+      lastState: r.lastState,
+      retryCount: Number(r.retryCount ?? 0) || 0,
+    }));
+  }
+
+  async approvalSlaMetrics(tenantId: string): Promise<{
+    avgApprovalTimeMs: number;
+    timeoutRate: number;
+    pendingCount: number;
+    breachedSlaCount: number;
+  }> {
+    const t = tenantId.trim();
+    const pending = await this.listPendingApprovals(t);
+    const pendingCount = pending.length;
+
+    const timeouts = await this.transitions.count({
+      where: { tenantId: t, machine: MachineKind.APPROVAL, toState: ApprovalMachineState.TIMEOUT },
+    });
+    const approved = await this.transitions.count({
+      where: { tenantId: t, machine: MachineKind.APPROVAL, toState: ApprovalMachineState.APPROVED },
+    });
+    const denom = timeouts + approved;
+    const timeoutRate = denom > 0 ? timeouts / denom : 0;
+
+    const breachedSlaCount = await this.transitions.count({
+      where: {
+        tenantId: t,
+        machine: MachineKind.APPROVAL,
+        toState: In([ApprovalMachineState.TIMEOUT, ApprovalMachineState.ESCALATED]),
+      },
+    });
+
+    const avgRow = (await this.transitions.query(
+      `
+      SELECT AVG((strftime('%s', b.occurredAt) - strftime('%s', a.occurredAt)) * 1000) AS ms
+      FROM state_transition_log b
+      JOIN (
+        SELECT correlationId, MIN(occurredAt) AS startedAt
+        FROM state_transition_log
+        WHERE tenantId = ? AND machine = ? AND to_state IN ('REQUESTED','PENDING','COUNTER','COUNTERED')
+        GROUP BY correlationId
+      ) a ON a.correlationId = b.correlationId
+      WHERE b.tenantId = ?
+        AND b.machine = ?
+        AND b.to_state = ?
+        AND b.occurredAt >= a.startedAt
+      `,
+      [t, MachineKind.APPROVAL, t, MachineKind.APPROVAL, ApprovalMachineState.APPROVED],
+    )) as Array<{ ms: number | null }>;
+    const avgApprovalTimeMs = Math.round(Number(avgRow[0]?.ms ?? 0) || 0);
+
+    return { avgApprovalTimeMs, timeoutRate, pendingCount, breachedSlaCount };
   }
 
   async observabilitySummary(tenantId: string): Promise<{
@@ -319,16 +467,142 @@ export class TransitionReadModelService {
     };
   }
 
-  private async borrowerSnapshot(
-    tenantId: string,
-    correlationId: string,
-  ): Promise<{ name?: string; phone?: string; accountNumber?: string }> {
-    const row = await this.ingestionRecords.findOne({ where: { tenantId, correlationId } });
-    if (!row) {
-      return {};
+  private async campaignIdsBatch(tenantId: string, correlationIds: string[]): Promise<Map<string, string | null>> {
+    const out = new Map<string, string | null>();
+    if (correlationIds.length === 0) return out;
+    const rows = await this.ingestionRecords.find({
+      where: { tenantId, correlationId: In(correlationIds) },
+      select: ['correlationId', 'campaignId'],
+    });
+    for (const row of rows) {
+      out.set(row.correlationId, row.campaignId?.trim() || null);
     }
+    return out;
+  }
+
+  private async borrowerSnapshotsBatch(
+    tenantId: string,
+    correlationIds: string[],
+  ): Promise<Map<string, { name?: string; phone?: string; accountNumber?: string }>> {
+    const out = new Map<string, { name?: string; phone?: string; accountNumber?: string }>();
+    if (correlationIds.length === 0) return out;
+    const rows = await this.ingestionRecords.find({
+      where: { tenantId, correlationId: In(correlationIds) },
+      select: ['correlationId', 'payloadSealed'],
+    });
+    for (const row of rows) {
+      out.set(row.correlationId, this.decodeBorrowerSnapshot(row.payloadSealed));
+    }
+    return out;
+  }
+
+  private async negotiatedAmountsBatch(
+    tenantId: string,
+    correlationIds: string[],
+  ): Promise<Map<string, number | null>> {
+    const out = new Map<string, number | null>();
+    if (correlationIds.length === 0) return out;
+    const rows = await this.transitions.find({
+      where: { tenantId, correlationId: In(correlationIds), machine: MachineKind.CALL },
+      order: { occurredAt: 'DESC', id: 'DESC' },
+      select: ['correlationId', 'metadataJson'],
+    });
+    for (const row of rows) {
+      if (out.has(row.correlationId)) continue;
+      const m = safeJson(row.metadataJson);
+      if (!m) continue;
+      const v = m.negotiatedAmountCents ?? m.offerAmountCents;
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        out.set(row.correlationId, v);
+      }
+    }
+    return out;
+  }
+
+  private async prioritiesFromDataBatch(
+    tenantId: string,
+    correlationIds: string[],
+  ): Promise<Map<string, { score?: number; label?: string } | null>> {
+    const out = new Map<string, { score?: number; label?: string } | null>();
+    if (correlationIds.length === 0) return out;
+    const rows = await this.transitions.find({
+      where: { tenantId, correlationId: In(correlationIds), machine: MachineKind.DATA },
+      order: { occurredAt: 'DESC', id: 'DESC' },
+      select: ['correlationId', 'metadataJson'],
+    });
+    for (const row of rows) {
+      if (out.has(row.correlationId)) continue;
+      const m = safeJson(row.metadataJson);
+      if (!m) {
+        out.set(row.correlationId, null);
+        continue;
+      }
+      const score = typeof m.priorityScore === 'number' ? m.priorityScore : undefined;
+      const label = typeof m.priorityLabel === 'string' ? m.priorityLabel : undefined;
+      out.set(row.correlationId, score == null && label == null ? null : { score, label });
+    }
+    return out;
+  }
+
+  private async paymentAmountsBatch(tenantId: string, paymentIds: string[]): Promise<Map<string, number | null>> {
+    const out = new Map<string, number | null>();
+    if (paymentIds.length === 0) return out;
+    const rows = await this.transitions.find({
+      where: { tenantId, correlationId: In(paymentIds), machine: MachineKind.PAYMENT },
+      order: { occurredAt: 'ASC', id: 'ASC' },
+      select: ['correlationId', 'metadataJson'],
+    });
+    for (const row of rows) {
+      if (out.has(row.correlationId)) continue;
+      const m = safeJson(row.metadataJson);
+      const v = m?.amountCents;
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        out.set(row.correlationId, v);
+      }
+    }
+    return out;
+  }
+
+  private async latestTransitionsBatch(
+    tenantId: string,
+    correlationIds: string[],
+    perCorrelationLimit: number,
+  ): Promise<Map<string, StateTransitionLogEntity[]>> {
+    const out = new Map<string, StateTransitionLogEntity[]>();
+    if (correlationIds.length === 0) return out;
+    const n = Math.max(1, Math.min(50, perCorrelationLimit));
+    const rows = (await this.transitions.query(
+      `
+      SELECT id, tenantId, correlationId, machine, from_state AS fromState, to_state AS toState, actor, metadataJson, occurredAt
+      FROM (
+        SELECT id, tenantId, correlationId, machine, from_state, to_state, actor, metadataJson, occurredAt,
+               ROW_NUMBER() OVER (
+                 PARTITION BY correlationId
+                 ORDER BY occurredAt DESC, id DESC
+               ) AS rn
+        FROM state_transition_log
+        WHERE tenantId = ? AND correlationId IN (${correlationIds.map(() => '?').join(',')})
+      ) s
+      WHERE s.rn <= ?
+      ORDER BY correlationId, occurredAt DESC, id DESC
+      `,
+      [tenantId, ...correlationIds, n],
+    )) as Array<StateTransitionLogEntity>;
+    for (const row of rows) {
+      const bucket = out.get(row.correlationId) ?? [];
+      bucket.push(row);
+      out.set(row.correlationId, bucket);
+    }
+    return out;
+  }
+
+  private decodeBorrowerSnapshot(payloadSealed: string): {
+    name?: string;
+    phone?: string;
+    accountNumber?: string;
+  } {
     try {
-      const json = this.pii.openUtf8(row.payloadSealed);
+      const json = this.pii.openUtf8(payloadSealed);
       const o = JSON.parse(json) as Record<string, unknown>;
       const name =
         (typeof o.name === 'string' && o.name) ||
@@ -342,60 +616,4 @@ export class TransitionReadModelService {
     }
   }
 
-  private async negotiatedAmountCents(tenantId: string, correlationId: string): Promise<number | null> {
-    const rows = await this.transitions.find({
-      where: { tenantId, correlationId, machine: MachineKind.CALL },
-      order: { occurredAt: 'DESC' },
-      take: 15,
-    });
-    for (const row of rows) {
-      const m = safeJson(row.metadataJson);
-      if (!m) {
-        continue;
-      }
-      const v = m.negotiatedAmountCents ?? m.offerAmountCents;
-      if (typeof v === 'number' && Number.isFinite(v)) {
-        return v;
-      }
-    }
-    return null;
-  }
-
-  private async priorityFromData(
-    tenantId: string,
-    correlationId: string,
-  ): Promise<{ score?: number; label?: string } | null> {
-    const row = await this.transitions.findOne({
-      where: { tenantId, correlationId, machine: MachineKind.DATA },
-      order: { occurredAt: 'DESC' },
-    });
-    const m = safeJson(row?.metadataJson ?? null);
-    if (!m) {
-      return null;
-    }
-    const score = typeof m.priorityScore === 'number' ? m.priorityScore : undefined;
-    const label = typeof m.priorityLabel === 'string' ? m.priorityLabel : undefined;
-    if (score == null && label == null) {
-      return null;
-    }
-    return { score, label };
-  }
-
-  private async campaignIdForCase(tenantId: string, correlationId: string): Promise<string | null> {
-    const row = await this.ingestionRecords.findOne({ where: { tenantId, correlationId } });
-    return row?.campaignId?.trim() || null;
-  }
-
-  private async paymentAmountCents(tenantId: string, paymentId: string): Promise<number | null> {
-    const row = await this.transitions.findOne({
-      where: { tenantId, correlationId: paymentId, machine: MachineKind.PAYMENT },
-      order: { occurredAt: 'ASC' },
-    });
-    const m = safeJson(row?.metadataJson ?? null);
-    const v = m?.amountCents;
-    if (typeof v === 'number' && Number.isFinite(v)) {
-      return v;
-    }
-    return null;
-  }
 }

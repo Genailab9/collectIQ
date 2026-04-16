@@ -1,6 +1,6 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
-export type CampaignStatus = 'ACTIVE' | 'ARCHIVED';
+export type CampaignStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'CANCELLED';
 
 @Entity({ name: 'campaign' })
 @Index(['tenantId', 'status'])
@@ -17,7 +17,7 @@ export class CampaignEntity {
   @Column({ type: 'text', nullable: true })
   description!: string | null;
 
-  @Column({ type: 'varchar', length: 24, default: 'ACTIVE' })
+  @Column({ type: 'varchar', length: 24, default: 'DRAFT' })
   status!: CampaignStatus;
 
   @CreateDateColumn({ type: 'datetime' })

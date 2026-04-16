@@ -40,7 +40,15 @@ export class TenantIsolationGuard implements CanActivate {
     }
 
     const path = req.path ?? '';
-    if (path.startsWith('/webhooks/') || path === '/metrics' || path.startsWith('/system/')) {
+    if (
+      path.startsWith('/webhooks/') ||
+      path === '/metrics' ||
+      path === '/health' ||
+      path.startsWith('/health/') ||
+      path === '/live' ||
+      path === '/ready' ||
+      path.startsWith('/system/')
+    ) {
       return true;
     }
 

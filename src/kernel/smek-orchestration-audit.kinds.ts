@@ -14,6 +14,8 @@ export const SMEK_ORCHESTRATION_AUDIT_KIND = {
   AdapterResult: 'KERNEL_ADAPTER_RESULT',
   /** Adapter invocation failed (error snapshot persisted before throw). */
   AdapterError: 'KERNEL_ADAPTER_ERROR',
+  /** Domain event contracts emitted from canonical state transitions (output-only observability). */
+  DomainEvent: 'KERNEL_DOMAIN_EVENT',
 } as const;
 
 export type SmekOrchestrationAuditKind =

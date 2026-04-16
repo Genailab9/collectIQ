@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import Stripe from 'stripe';
 import type { PaymentAdapter } from '../payment.adapter';
-import { PaymentGatewayConfigurationError, PaymentGatewayError } from '../payment.errors';
+import { PaymentGatewayError } from '../payment.errors';
 import type {
   PaymentConfirmInput,
   PaymentConfirmResult,
@@ -14,19 +14,21 @@ import { StripePaymentConfig } from './stripe-payment.config';
 
 @Injectable()
 export class StripePaymentAdapter implements PaymentAdapter {
-  private readonly stripe: Stripe;
+  private readonly stripe: Stripe | null;
+  private readonly mockMode: boolean;
 
   constructor(private readonly cfg: StripePaymentConfig) {
     const key = this.cfg.secretKey;
-    if (!key) {
-      throw new PaymentGatewayConfigurationError('STRIPE_SECRET_KEY is not configured.');
-    }
-    this.stripe = new Stripe(key, { typescript: true });
+    this.mockMode = !key || this.cfg.bootMode === 'demo-safe';
+    this.stripe = key ? new Stripe(key, { typescript: true }) : null;
   }
 
   async retrievePaymentIntent(
     input: PaymentRetrieveIntentInput,
   ): Promise<PaymentRetrieveIntentResult> {
+    if (this.mockMode || !this.stripe) {
+      return { gatewayPaymentIntentId: input.gatewayPaymentIntentId, status: 'succeeded' };
+    }
     try {
       const pi = await this.stripe.paymentIntents.retrieve(input.gatewayPaymentIntentId);
       return { gatewayPaymentIntentId: pi.id, status: pi.status };
@@ -36,6 +38,12 @@ export class StripePaymentAdapter implements PaymentAdapter {
   }
 
   async createIntent(input: PaymentCreateIntentInput): Promise<PaymentCreateIntentResult> {
+    if (this.mockMode || !this.stripe) {
+      return {
+        gatewayPaymentIntentId: `pi_mock_${input.paymentId}`,
+        status: 'requires_confirmation',
+      };
+    }
     try {
       const pi = await this.stripe.paymentIntents.create(
         {
@@ -57,6 +65,9 @@ export class StripePaymentAdapter implements PaymentAdapter {
   }
 
   async confirmPayment(input: PaymentConfirmInput): Promise<PaymentConfirmResult> {
+    if (this.mockMode || !this.stripe) {
+      return { gatewayPaymentIntentId: input.gatewayPaymentIntentId, status: 'succeeded' };
+    }
     try {
       const pi = await this.stripe.paymentIntents.retrieve(input.gatewayPaymentIntentId);
       if (pi.status === 'requires_confirmation') {

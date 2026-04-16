@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { NextFunction, Request, Response } from 'express';
 import { timingSafeEqualStrings } from './timing-safe-equal';
+import { emitRuntimeProof } from '../runtime-proof/runtime-proof-emitter';
 
 const EXECUTION_PATH_PREFIXES = [
   '/payments',
@@ -23,6 +24,7 @@ const EXECUTION_PATH_PREFIXES = [
   '/dashboard',
   '/feature-flags',
   '/demo',
+  '/api/v1',
 ] as const;
 
 function pathRequiresExecutionApiKey(path: string): boolean {
@@ -73,6 +75,12 @@ export class PrdSecurityMiddleware implements NestMiddleware {
     const requireTls = this.isTruthy(this.config.get<string>('COLLECTIQ_REQUIRE_TLS'));
     if (requireTls && !isLikelyHttps(req)) {
       this.logger.warn(`prd.security.tls_rejected method=${req.method} path=${path}`);
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-001',
+        event_type: 'AUTH_EVENT',
+        tenant_id: String(req.header('x-collectiq-tenant-id') ?? 'n/a') || 'n/a',
+        metadata: { path, method: req.method, reason: 'tls_required' },
+      });
       next(
         new ForbiddenException(
           'PRD §16: TLS is required (set COLLECTIQ_TRUST_PROXY=1 behind a TLS-terminating reverse proxy).',
@@ -104,6 +112,12 @@ export class PrdSecurityMiddleware implements NestMiddleware {
     const ok = candidates.some((c) => acceptedKeys.some((k) => timingSafeEqualStrings(k, c)));
     if (!ok) {
       this.logger.warn(`prd.security.api_key_rejected method=${req.method} path=${path}`);
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: String(req.header('x-collectiq-tenant-id') ?? 'n/a') || 'n/a',
+        metadata: { path, method: req.method, reason: 'api_key_invalid' },
+      });
       next(
         new UnauthorizedException(
           'PRD §16: missing or invalid API key (send X-CollectIQ-Api-Key, or X-CollectIQ-Execution-Key when using COLLECTIQ_EXECUTION_API_KEY).',
@@ -112,6 +126,12 @@ export class PrdSecurityMiddleware implements NestMiddleware {
       return;
     }
 
+    emitRuntimeProof({
+      requirement_id: 'REQ-SEC-002',
+      event_type: 'AUTH_EVENT',
+      tenant_id: String(req.header('x-collectiq-tenant-id') ?? 'n/a') || 'n/a',
+      metadata: { path, method: req.method, result: 'accepted' },
+    });
     next();
   }
 

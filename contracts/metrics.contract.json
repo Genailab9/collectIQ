@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "prometheusServicePath": "src/observability/prometheus-metrics.service.ts",
+  "metricMethods": [
+    "incApiRequestsTotal",
+    "observeApiLatencyMs",
+    "incApiErrorsTotal",
+    "incWorkerRunsTotal",
+    "observeWorkerLatencyMs",
+    "incWorkerErrorsTotal"
+  ],
+  "apiTargets": [
+    {
+      "path": "src/observability/observability.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/modules/tenant-feature-flags/tenant-feature-flag.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/saas/saas-admin.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/saas/saas-billing.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/saas/saas-audit.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/saas/saas-tenant.controller.ts",
+      "requiredCalls": [
+        "this.metrics.incApiRequestsTotal(",
+        "this.metrics.observeApiLatencyMs(",
+        "this.metrics.incApiErrorsTotal("
+      ]
+    }
+  ],
+  "workerTargets": [
+    {
+      "path": "src/survival/survival-jobs.service.ts",
+      "requiredCalls": [
+        "this.metrics.incWorkerRunsTotal(",
+        "this.metrics.observeWorkerLatencyMs(",
+        "this.metrics.incWorkerErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/survival/notification-outbox.service.ts",
+      "requiredCalls": [
+        "this.metrics.incWorkerRunsTotal(",
+        "this.metrics.observeWorkerLatencyMs(",
+        "this.metrics.incWorkerErrorsTotal("
+      ]
+    },
+    {
+      "path": "src/recovery/webhook-recovery.service.ts",
+      "requiredCalls": [
+        "this.metrics.incWorkerRunsTotal(",
+        "this.metrics.observeWorkerLatencyMs(",
+        "this.metrics.incWorkerErrorsTotal("
+      ]
+    }
+  ],
+  "controlPlaneTargets": [
+    {
+      "path": "src/modules/tenant-feature-flags/tenant-feature-flag.controller.ts",
+      "requiredCalls": ["emitPlaneEvent("]
+    },
+    {
+      "path": "src/saas/saas-admin.controller.ts",
+      "requiredCalls": ["emitPlaneEvent("]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { Request } from 'express';
 import { timingSafeEqualStrings } from '../security/timing-safe-equal';
+import { emitRuntimeProof } from '../runtime-proof/runtime-proof-emitter';
 
 @Injectable()
 export class SaaSAdminGuard implements CanActivate {
@@ -19,9 +20,31 @@ export class SaaSAdminGuard implements CanActivate {
     }
     const req = context.switchToHttp().getRequest<Request>();
     const provided = String(req.header('x-collectiq-admin-key') ?? '').trim();
+    const role = String(req.header('x-collectiq-admin-role') ?? '').trim().toUpperCase();
     if (!provided || !timingSafeEqualStrings(provided, expected)) {
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: 'n/a',
+        metadata: { path: req.path, method: req.method, reason: 'admin_key_invalid' },
+      });
       throw new UnauthorizedException('Invalid admin API key.');
     }
+    if (role !== 'ADMIN' && role !== 'SYSTEM') {
+      emitRuntimeProof({
+        requirement_id: 'REQ-SEC-002',
+        event_type: 'AUTH_EVENT',
+        tenant_id: 'n/a',
+        metadata: { path: req.path, method: req.method, reason: 'admin_role_missing' },
+      });
+      throw new UnauthorizedException('Admin role is required for control-plane access.');
+    }
+    emitRuntimeProof({
+      requirement_id: 'REQ-SEC-002',
+      event_type: 'AUTH_EVENT',
+      tenant_id: 'n/a',
+      metadata: { path: req.path, method: req.method, result: 'accepted' },
+    });
     return true;
   }
 }

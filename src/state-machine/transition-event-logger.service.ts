@@ -1,16 +1,13 @@
 import { Injectable, Optional } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { NotificationOutboxService } from '../survival/notification-outbox.service';
 import { TransitionLogPersistenceError } from './errors/state-machine.errors';
-import { StateTransitionLogEntity } from './entities/state-transition-log.entity';
 import type { TransitionProposal } from './types/transition-proposal';
+import { TransitionEventLoggerQueryService } from './transition-event-logger.query';
 
 @Injectable()
 export class TransitionEventLoggerService {
   constructor(
-    @InjectRepository(StateTransitionLogEntity)
-    private readonly logs: Repository<StateTransitionLogEntity>,
+    private readonly transitionLogQuery: TransitionEventLoggerQueryService,
     @Optional() private readonly notifications?: NotificationOutboxService,
   ) {}
 
@@ -24,7 +21,7 @@ export class TransitionEventLoggerService {
       }
     }
 
-    const row = this.logs.create({
+    const row = this.transitionLogQuery.create({
       tenantId: proposal.tenantId,
       correlationId: proposal.correlationId,
       machine: proposal.machine,
@@ -35,7 +32,7 @@ export class TransitionEventLoggerService {
     });
 
     try {
-      const saved = await this.logs.save(row);
+      const saved = await this.transitionLogQuery.save(row);
       if (this.notifications) {
         void this.notifications.onPersistedTransition(saved).catch(() => undefined);
       }

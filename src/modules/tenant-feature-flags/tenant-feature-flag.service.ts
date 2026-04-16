@@ -40,4 +40,31 @@ export class TenantFeatureFlagService {
     });
     return this.flags.save(row);
   }
+
+  async getBoolean(tenantId: string, key: string, defaultValue = false): Promise<boolean> {
+    const row = await this.flags.findOne({
+      where: { tenantId: tenantId.trim(), key: key.trim() },
+      select: { valueJson: true },
+    });
+    if (!row) {
+      return defaultValue;
+    }
+    try {
+      const parsed = JSON.parse(row.valueJson) as unknown;
+      if (typeof parsed === 'boolean') {
+        return parsed;
+      }
+      if (typeof parsed === 'string') {
+        const v = parsed.trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(v)) return true;
+        if (['0', 'false', 'no', 'off'].includes(v)) return false;
+      }
+      if (typeof parsed === 'number') {
+        return parsed !== 0;
+      }
+      return defaultValue;
+    } catch {
+      return defaultValue;
+    }
+  }
 }

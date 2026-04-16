@@ -8,6 +8,8 @@ import { TenantContextService } from '../tenant/tenant-context.service';
 import { StructuredLoggerService } from '../observability/structured-logger.service';
 import { ExecutionRecoveryService } from './execution-recovery.service';
 import { WebhookRecoveryService, webhookRecoverySilenceMinutes } from './webhook-recovery.service';
+import { emitRuntimeProof } from '../runtime-proof/runtime-proof-emitter';
+import { PrometheusMetricsService } from '../observability/prometheus-metrics.service';
 
 const DEFAULT_TIMEOUT_MINUTES = 5;
 /** Caps work per tick so one minute cannot scan an unbounded log. */
@@ -37,6 +39,7 @@ export interface StaleExecutionRow {
  */
 @Injectable()
 export class RecoveryWorker {
+  // LEGACY MIGRATION SURFACE: worker sweep queries still use repository/query-builder while system-plane migration completes.
   private readonly logger = new Logger(RecoveryWorker.name);
   /** Keys `${tenantId}\x1f${correlationId}` currently inside `recoverExecution`. */
   private readonly inFlight = new Set<string>();
@@ -49,12 +52,16 @@ export class RecoveryWorker {
     private readonly config: ConfigService,
     private readonly tenantContext: TenantContextService,
     private readonly structured: StructuredLoggerService,
+    private readonly metrics: PrometheusMetricsService,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
   async sweepStaleExecutions(): Promise<void> {
+    const started = Date.now();
+    this.metrics.incWorkerRunsTotal('recovery_worker', 'sweep_stale_executions');
     const enabled = (this.config.get<string>('RECOVERY_WORKER_ENABLED', 'true') ?? 'true').toLowerCase();
     if (enabled === 'false' || enabled === '0' || enabled === 'no') {
+      this.metrics.observeWorkerLatencyMs('recovery_worker', 'sweep_stale_executions', Date.now() - started);
       return;
     }
 
@@ -66,6 +73,12 @@ export class RecoveryWorker {
       adapter: 'n/a',
       result: 'SWEEP_TICK_START',
       surface: 'RECOVERY_WORKER',
+    });
+    emitRuntimeProof({
+      requirement_id: 'REQ-REC-003',
+      event_type: 'WORKER_EXECUTION',
+      tenant_id: 'n/a',
+      metadata: { worker: 'RecoveryWorker.sweepStaleExecutions', phase: 'start' },
     });
 
     const timeoutMinutes = parsePositiveInt(
@@ -88,9 +101,20 @@ export class RecoveryWorker {
         surface: 'RECOVERY_WORKER',
         message: String(cause),
       });
+      emitRuntimeProof({
+        requirement_id: 'REQ-WEB-005',
+        event_type: 'WORKER_EXECUTION',
+        tenant_id: 'n/a',
+        metadata: {
+          worker: 'RecoveryWorker.webhookRecovery',
+          phase: 'error',
+          message: String(cause),
+        },
+      });
     }
 
     const candidates = await this.findStaleExecutionKeys(cutoff, MAX_CANDIDATES_PER_TICK);
+    this.metrics.setWorkerBacklog('recovery_worker', 'sweep_stale_executions', candidates.length);
 
     for (const c of candidates) {
       const lockKey = `${c.tenantId}\x1f${c.correlationId}`;
@@ -159,6 +183,7 @@ export class RecoveryWorker {
           }
         });
       } catch (cause) {
+        this.metrics.incWorkerErrorsTotal('recovery_worker', 'sweep_stale_executions', 'execution_recovery_failed');
         this.logger.warn(
           `recovery.worker failed tenantId=${c.tenantId} correlationId=${c.correlationId} error=${String(cause)}`,
         );
@@ -172,10 +197,32 @@ export class RecoveryWorker {
           surface: 'RECOVERY_WORKER',
           message: String(cause),
         });
+        emitRuntimeProof({
+          requirement_id: 'REQ-REC-001',
+          event_type: 'WORKER_EXECUTION',
+          tenant_id: c.tenantId,
+          metadata: {
+            worker: 'RecoveryWorker.sweepStaleExecutions',
+            phase: 'execution_error',
+            correlationId: c.correlationId,
+            message: String(cause),
+          },
+        });
       } finally {
         this.inFlight.delete(lockKey);
       }
     }
+    emitRuntimeProof({
+      requirement_id: 'REQ-REC-003',
+      event_type: 'WORKER_EXECUTION',
+      tenant_id: 'n/a',
+      metadata: {
+        worker: 'RecoveryWorker.sweepStaleExecutions',
+        phase: 'complete',
+        candidates: candidates.length,
+      },
+    });
+    this.metrics.observeWorkerLatencyMs('recovery_worker', 'sweep_stale_executions', Date.now() - started);
   }
 
   /**

@@ -1,6 +1,8 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { accountMachineDefinition } from './definitions/account-machine.definition';
 import { approvalMachineDefinition } from './definitions/approval-machine.definition';
 import { callMachineDefinition } from './definitions/call-machine.definition';
+import { campaignMachineDefinition } from './definitions/campaign-machine.definition';
 import { dataMachineDefinition } from './definitions/data-machine.definition';
 import { paymentMachineDefinition } from './definitions/payment-machine.definition';
 import { syncMachineDefinition } from './definitions/sync-machine.definition';
@@ -14,12 +16,16 @@ export class MachineRegistryService implements OnModuleInit {
   private sealed = false;
 
   onModuleInit(): void {
-    this.logger.log('Bootstrapping state machine registry (DATA, CALL, APPROVAL, PAYMENT, SYNC).');
+    this.logger.log(
+      'Bootstrapping state machine registry (DATA, CALL, APPROVAL, PAYMENT, SYNC, ACCOUNT, CAMPAIGN).',
+    );
     this.register(dataMachineDefinition);
     this.register(callMachineDefinition);
     this.register(approvalMachineDefinition);
     this.register(paymentMachineDefinition);
     this.register(syncMachineDefinition);
+    this.register(accountMachineDefinition);
+    this.register(campaignMachineDefinition);
     this.seal();
     this.logger.log('State machine registry sealed.');
   }
@@ -51,6 +57,8 @@ export class MachineRegistryService implements OnModuleInit {
       MachineKind.APPROVAL,
       MachineKind.PAYMENT,
       MachineKind.SYNC,
+      MachineKind.ACCOUNT,
+      MachineKind.CAMPAIGN,
     ] as const;
     for (const kind of required) {
       if (!this.definitions.has(kind)) {

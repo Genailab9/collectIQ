@@ -27,8 +27,12 @@ export class OpenAiNegotiationAdapter implements AiAdapter {
 
   async suggestNegotiation(input: AiNegotiationInput): Promise<AiNegotiationSuggestion> {
     const apiKey = this.cfg.apiKey;
-    if (!apiKey) {
-      throw new AiProviderError('OPENAI_API_KEY is not configured.');
+    if (!apiKey || this.cfg.bootMode === 'demo-safe') {
+      return {
+        intent: 'Borrower requests a feasible repayment plan.',
+        offerSuggestion: 'Propose a structured 3-installment repayment schedule.',
+        negotiationStrategy: 'Confirm affordability, recap terms, and guide borrower to payment confirmation.',
+      };
     }
     const client = new OpenAI({ apiKey });
     const userPayload = [
@@ -63,7 +67,7 @@ export class OpenAiNegotiationAdapter implements AiAdapter {
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw) as unknown;
-    } catch (cause) {
+    } catch {
       throw new AiOutputValidationError('Model output was not valid JSON.', [
         'JSON.parse failed for model output',
       ]);

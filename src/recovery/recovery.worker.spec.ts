@@ -16,6 +16,12 @@ function makeQbMock(getRawMany: jest.Mock) {
   return { qb, repo: { createQueryBuilder: jest.fn().mockReturnValue(qb) } };
 }
 
+const metricsMock = {
+  incWorkerRunsTotal: jest.fn(),
+  observeWorkerLatencyMs: jest.fn(),
+  setWorkerBacklog: jest.fn(),
+};
+
 describe('RecoveryWorker', () => {
   it('findStaleExecutionKeys maps raw rows to dates', async () => {
     const getRawMany = jest.fn().mockResolvedValue([
@@ -33,6 +39,7 @@ describe('RecoveryWorker', () => {
       { get: jest.fn() } as never,
       { run: jest.fn((_t, fn: () => unknown) => fn()) } as never,
       { emit: jest.fn() } as never,
+      metricsMock as never,
     );
 
     const rows = await worker.findStaleExecutionKeys(new Date('2025-01-01'), 10);
@@ -85,6 +92,7 @@ describe('RecoveryWorker', () => {
       config as never,
       { run: jest.fn((_t, fn: () => Promise<unknown>) => fn()) } as never,
       { emit: jest.fn() } as never,
+      metricsMock as never,
     );
 
     await worker.sweepStaleExecutions();
@@ -109,6 +117,7 @@ describe('RecoveryWorker', () => {
       config as never,
       { run: jest.fn() } as never,
       { emit: jest.fn() } as never,
+      metricsMock as never,
     );
 
     await worker.sweepStaleExecutions();

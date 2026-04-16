@@ -1,0 +1,8 @@
+[
+  "src/observability/observability.controller.ts",
+  "src/modules/tenant-feature-flags/tenant-feature-flag.controller.ts",
+  "src/saas/saas-admin.controller.ts",
+  "src/saas/saas-billing.controller.ts",
+  "src/saas/saas-audit.controller.ts",
+  "src/saas/saas-tenant.controller.ts"
+]

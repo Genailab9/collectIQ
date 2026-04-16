@@ -10,7 +10,7 @@ export class SystemResilienceController {
    */
   @Get('resilience-check')
   async resilienceCheck(): Promise<'PASS' | 'FAIL'> {
-    const out = await this.validity.runProductionGate();
+    const out = await this.validity.runProductionGate({ actor: 'system' });
     return out.result;
   }
 }

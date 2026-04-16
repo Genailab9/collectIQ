@@ -8,10 +8,12 @@ const REQUIRED_MACHINES: readonly MachineKind[] = [
   MachineKind.APPROVAL,
   MachineKind.PAYMENT,
   MachineKind.SYNC,
+  MachineKind.ACCOUNT,
+  MachineKind.CAMPAIGN,
 ] as const;
 
 /**
- * PRD v1.1 §13 — post-bootstrap checks that the execution kernel can rely on a sealed five-machine registry.
+ * PRD v1.1 §13 — post-bootstrap checks that the execution kernel can rely on a sealed registry.
  * Shape rules are enforced earlier by `MachineRegistryService.validateDefinitionShape` during registration.
  */
 @Injectable()
@@ -36,7 +38,7 @@ export class PrdSystemValidityService implements OnApplicationBootstrap {
     const present = new Set(this.machines.listKinds());
     if (present.size !== REQUIRED_MACHINES.length) {
       throw new Error(
-        `PRD §13: expected ${REQUIRED_MACHINES.length} registered machines (DATA+CALL+APPROVAL+PAYMENT+SYNC), found ${present.size} (${[
+        `PRD §13: expected ${REQUIRED_MACHINES.length} registered machines (DATA+CALL+APPROVAL+PAYMENT+SYNC+ACCOUNT+CAMPAIGN), found ${present.size} (${[
           ...present,
         ].join(', ')}).`,
       );

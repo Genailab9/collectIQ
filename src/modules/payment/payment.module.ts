@@ -9,7 +9,7 @@ import { ReadModelModule } from '../read-model/read-model.module';
 import { SyncModule } from '../sync/sync.module';
 import { PaymentController } from './payment.controller';
 import { PaymentService } from './payment.service';
-import { PaymentTransitionQueryService } from './payment-transition-query.service';
+import { PaymentTransitionQueryService } from './payment-transition.query';
 
 @Module({
   imports: [

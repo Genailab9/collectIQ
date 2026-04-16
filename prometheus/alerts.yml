@@ -46,3 +46,62 @@ groups:
           description: |
             Resilience circuits are opening or rejecting calls. Check adapter health,
             RESILIENCE_FAILURE_THRESHOLD / RESILIENCE_COOLDOWN_MS, and provider status.
+
+      - alert: CollectiqApiLatencyP95Breached
+        expr: histogram_quantile(0.95, sum by (le) (rate(collectiq_api_latency_ms_bucket[5m]))) > 1000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: API p95 latency SLO breached
+          description: API p95 latency is above 1000ms over a 5 minute window.
+
+      - alert: CollectiqApiErrorRateBreached
+        expr: |
+          (
+            sum(rate(collectiq_api_errors_total[5m]))
+            /
+            clamp_min(sum(rate(collectiq_api_requests_total[5m])), 0.001)
+          ) > 0.02
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: API error-rate SLO breached
+          description: API error ratio is above 2% over a 5 minute window.
+
+      - alert: CollectiqWorkerLatencyP95Breached
+        expr: histogram_quantile(0.95, sum by (le) (rate(collectiq_worker_latency_ms_bucket[10m]))) > 5000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Worker p95 latency SLO breached
+          description: Worker p95 latency is above 5000ms over a 10 minute window.
+
+      - alert: CollectiqWorkerBacklogDepthHigh
+        expr: max(collectiq_worker_backlog_depth) > 500
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Worker backlog depth SLO breached
+          description: Worker backlog depth is above 500.
+
+      - alert: CollectiqSseListenerRejectionsDetected
+        expr: increase(collectiq_sse_listener_rejected_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: SSE listener rejection SLO breached
+          description: SSE listener rejections detected in the last 5 minutes.
+
+      - alert: CollectiqProjectionIntegrityFailuresDetected
+        expr: increase(collectiq_projection_integrity_errors_total[15m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Projection integrity failure detected
+          description: Projection integrity errors observed in the last 15 minutes.

@@ -1,11 +1,13 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import express from 'express';
+import * as express from 'express';
 import { AppModule } from './app.module';
+import { GlobalHttpExceptionFilter } from './lib/errors/global-http-exception.filter';
 
 async function bootstrap() {
+  const logger = new Logger('Bootstrap');
   const dataDir = join(process.cwd(), 'data');
   await mkdir(dataDir, { recursive: true });
   const app = await NestFactory.create(AppModule);
@@ -13,10 +15,11 @@ async function bootstrap() {
     origin: process.env.NEXT_PUBLIC_APP_URL?.trim() || '*',
     credentials: true,
   });
+  app.useGlobalFilters(new GlobalHttpExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false,
+      forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
     }),
@@ -35,6 +38,18 @@ async function bootstrap() {
     const server = app.getHttpAdapter().getInstance() as { set?: (name: string, val: unknown) => void };
     server.set?.('trust proxy', 1);
   }
+  const bootMode =
+    (process.env.APP_BOOT_MODE ?? '').trim().toLowerCase() === 'strict' ? 'strict' : 'demo-safe';
+  const providerMode = (key?: string) =>
+    key?.trim() && bootMode !== 'demo-safe' ? 'live' : 'mock';
+
+  logger.log('CollectIQ boot diagnostics');
+  logger.log(`mode=${bootMode}`);
+  logger.log(`stripe=${providerMode(process.env.STRIPE_SECRET_KEY)}`);
+  logger.log(`twilio=${providerMode(process.env.TWILIO_AUTH_TOKEN)}`);
+  logger.log(`openai=${providerMode(process.env.OPENAI_API_KEY)}`);
+  logger.log('compliance=active smek=ready');
+
   await app.listen(process.env.PORT ?? 3000);
 }
 

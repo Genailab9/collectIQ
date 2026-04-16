@@ -29,6 +29,12 @@ export class PaymentExecutionBridge implements PaymentExecutionPort {
       }
       case PaymentCommandKind.ConfirmPayment: {
         const body = envelope.body as PaymentConfirmInput;
+        if (await this.executionFlags.isJsonTruthy(body.tenantId, 'SIMULATE_PAYMENT_FAILURE')) {
+          return {
+            gatewayPaymentIntentId: body.gatewayPaymentIntentId,
+            status: 'failed',
+          };
+        }
         if (await this.executionFlags.isJsonTruthy(body.tenantId, 'DEMO_MODE')) {
           return {
             gatewayPaymentIntentId: body.gatewayPaymentIntentId,

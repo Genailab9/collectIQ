@@ -6,6 +6,8 @@ import * as nodemailer from 'nodemailer';
 import { Repository } from 'typeorm';
 import { QueryFailedError } from 'typeorm';
 import type { StateTransitionLogEntity } from '../state-machine/entities/state-transition-log.entity';
+import { PrometheusMetricsService } from '../observability/prometheus-metrics.service';
+import { StructuredLoggerService } from '../observability/structured-logger.service';
 import { NotificationFeedEntity } from './entities/notification-feed.entity';
 import { NotificationOutboxEntity } from './entities/notification-outbox.entity';
 
@@ -23,6 +25,7 @@ function backoffSeconds(attempt: number): number {
 
 @Injectable()
 export class NotificationOutboxService {
+  // LEGACY MIGRATION SURFACE: outbox persistence remains on repository/query-builder primitives until engine migration batch.
   private readonly logger = new Logger(NotificationOutboxService.name);
 
   constructor(
@@ -31,6 +34,8 @@ export class NotificationOutboxService {
     @InjectRepository(NotificationFeedEntity)
     private readonly feed: Repository<NotificationFeedEntity>,
     private readonly config: ConfigService,
+    private readonly metrics: PrometheusMetricsService,
+    private readonly structured: StructuredLoggerService,
   ) {}
 
   /**
@@ -64,6 +69,7 @@ export class NotificationOutboxService {
 
     const channels = this.resolveChannels();
     const now = new Date();
+    const pendingInserts: NotificationOutboxEntity[] = [];
     for (const channel of channels) {
       if (channel === 'internal') {
         continue;
@@ -71,7 +77,8 @@ export class NotificationOutboxService {
       const dedupeKey = `${dedupeBase}:${channel}`;
       const payload = { channel, transition: meta };
       try {
-        const o = this.outbox.create({
+        pendingInserts.push(
+          this.outbox.create({
           id: randomUUID(),
           tenantId,
           channel,
@@ -82,11 +89,26 @@ export class NotificationOutboxService {
           maxAttempts: 8,
           nextRetryAt: now,
           lastError: null,
-        });
-        await this.outbox.save(o);
+          }),
+        );
       } catch (e) {
         if (!isUniqueViolation(e)) {
           this.logger.warn(`notification_outbox_insert_failed channel=${channel} err=${String(e)}`);
+        }
+      }
+    }
+    if (pendingInserts.length > 0) {
+      try {
+        await this.outbox
+          .createQueryBuilder()
+          .insert()
+          .into(NotificationOutboxEntity)
+          .values(pendingInserts)
+          .orIgnore()
+          .execute();
+      } catch (e) {
+        if (!isUniqueViolation(e)) {
+          this.logger.warn(`notification_outbox_insert_failed err=${String(e)}`);
         }
       }
     }
@@ -106,51 +128,199 @@ export class NotificationOutboxService {
   }
 
   async processDueBatch(limit = 25): Promise<number> {
-    const now = new Date();
-    const due = await this.outbox
-      .createQueryBuilder('o')
-      .where('o.status IN (:...st)', { st: ['pending', 'failed'] })
-      .andWhere('(o.nextRetryAt IS NULL OR o.nextRetryAt <= :now)', { now })
-      .orderBy('o.nextRetryAt', 'ASC')
-      .addOrderBy('o.createdAt', 'ASC')
-      .take(limit)
-      .getMany();
+    const started = Date.now();
+    this.metrics.incWorkerRunsTotal('notification_outbox', 'process_due_batch');
+    const tenants = await this.listDueTenants(limit);
+    this.metrics.setWorkerBacklog('notification_outbox', 'process_due_batch_tenants', tenants.length);
     let done = 0;
-    for (const row of due) {
-      if (row.status === 'dead' || row.status === 'sent') {
-        continue;
+    for (const tenantId of tenants) {
+      const now = new Date();
+      const due = await this.outbox
+        .createQueryBuilder('o')
+        .where('o.tenantId = :tenantId', { tenantId })
+        .andWhere('o.status IN (:...st)', { st: ['pending', 'failed'] })
+        .andWhere('(o.nextRetryAt IS NULL OR o.nextRetryAt <= :now)', { now })
+        .orderBy('o.nextRetryAt', 'ASC')
+        .addOrderBy('o.createdAt', 'ASC')
+        .take(limit)
+        .getMany();
+      const runningEntries = due
+        .filter((row) => row.status !== 'dead' && row.status !== 'sent')
+        .map((row) => ({ id: row.id, attempts: row.attempts + 1 }));
+      await this.markRunningBatch(tenantId, runningEntries);
+      for (const row of due) {
+        if (row.status !== 'dead' && row.status !== 'sent') {
+          row.attempts += 1;
+          row.status = 'sending';
+        }
       }
-      row.status = 'sending';
-      row.attempts += 1;
-      await this.outbox.save(row);
-      try {
-        if (row.channel === 'email') {
-          await this.sendEmail(row);
-        } else if (row.channel === 'webhook') {
-          await this.sendWebhook(row);
-        } else {
-          throw new Error(`unsupported_channel:${row.channel}`);
+      const completedIds: string[] = [];
+      const failedEntries: Array<{
+        id: string;
+        status: 'failed' | 'dead';
+        lastError: string;
+        nextRetryAt: Date | null;
+      }> = [];
+      for (const row of due) {
+        if (row.status === 'dead' || row.status === 'sent') {
+          continue;
         }
-        row.status = 'sent';
-        row.lastError = null;
-        row.nextRetryAt = null;
-        await this.outbox.save(row);
-        done += 1;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        row.lastError = msg.slice(0, 2000);
-        if (row.attempts >= row.maxAttempts) {
-          row.status = 'dead';
+        try {
+          if (row.channel === 'email') {
+            await this.sendEmail(row);
+          } else if (row.channel === 'webhook') {
+            await this.sendWebhook(row);
+          } else {
+            throw new Error(`unsupported_channel:${row.channel}`);
+          }
+          row.status = 'sent';
+          row.lastError = null;
           row.nextRetryAt = null;
-        } else {
-          row.status = 'failed';
-          row.nextRetryAt = new Date(Date.now() + backoffSeconds(row.attempts) * 1000);
+          completedIds.push(row.id);
+          done += 1;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          row.lastError = msg.slice(0, 2000);
+          if (row.attempts >= row.maxAttempts) {
+            row.status = 'dead';
+            row.nextRetryAt = null;
+          } else {
+            row.status = 'failed';
+            row.nextRetryAt = new Date(Date.now() + backoffSeconds(row.attempts) * 1000);
+          }
+          failedEntries.push({
+            id: row.id,
+            status: row.status as 'failed' | 'dead',
+            lastError: row.lastError,
+            nextRetryAt: row.nextRetryAt,
+          });
+          this.metrics.incWorkerErrorsTotal('notification_outbox', 'process_due_batch', 'delivery_failed');
+          this.logger.warn(`notification_delivery_failed id=${row.id} channel=${row.channel} ${msg}`);
         }
-        await this.outbox.save(row);
-        this.logger.warn(`notification_delivery_failed id=${row.id} channel=${row.channel} ${msg}`);
+      }
+      await this.markCompletedBatch(tenantId, completedIds);
+      await this.markFailedBatch(tenantId, failedEntries);
+      if (completedIds.length > 0 || failedEntries.length > 0) {
+        this.structured.emit({
+          correlationId: `notification-outbox:${tenantId}`,
+          tenantId,
+          phase: 'CONTROL_PLANE',
+          state: 'NOTIFICATION_OUTBOX:BATCH_UPDATE',
+          adapter: 'notification.outbox',
+          result: 'SYSTEM_PLANE_EVENT',
+          surface: 'worker',
+          message: `completed=${completedIds.length} failed=${failedEntries.length}`,
+        });
       }
     }
+    this.metrics.observeWorkerLatencyMs('notification_outbox', 'process_due_batch', Date.now() - started);
+    void this.refreshOutboxDepthGauges();
     return done;
+  }
+
+  private async listDueTenants(limit: number): Promise<string[]> {
+    const now = new Date();
+    const rows = await this.outbox
+      .createQueryBuilder('o')
+      .select('o.tenantId', 'tenantId')
+      .where('o.tenantId IS NOT NULL')
+      .andWhere('o.tenantId <> :empty', { empty: '' })
+      .andWhere('o.status IN (:...st)', { st: ['pending', 'failed'] })
+      .andWhere('(o.nextRetryAt IS NULL OR o.nextRetryAt <= :now)', { now })
+      .groupBy('o.tenantId')
+      .orderBy('MIN(o.nextRetryAt)', 'ASC')
+      .limit(limit)
+      .getRawMany<{ tenantId: string }>();
+    return rows.map((r) => r.tenantId);
+  }
+
+  private async markRunningBatch(
+    tenantId: string,
+    entries: Array<{ id: string; attempts: number }>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    await this.outbox
+      .createQueryBuilder()
+      .update(NotificationOutboxEntity)
+      .set({ status: 'sending', attempts: () => 'attempts + 1' })
+      .where('tenantId = :tenantId', { tenantId })
+      .andWhere('id IN (:...ids)', { ids: entries.map((entry) => entry.id) })
+      .execute();
+  }
+
+  private async markCompletedBatch(tenantId: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) {
+      return;
+    }
+    await this.outbox
+      .createQueryBuilder()
+      .update(NotificationOutboxEntity)
+      .set({ status: 'sent', lastError: null, nextRetryAt: null })
+      .where('tenantId = :tenantId', { tenantId })
+      .andWhere('id IN (:...ids)', { ids })
+      .execute();
+  }
+
+  private async markFailedBatch(
+    tenantId: string,
+    entries: Array<{
+      id: string;
+      status: 'failed' | 'dead';
+      lastError: string;
+      nextRetryAt: Date | null;
+    }>,
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const ids = entries.map((entry) => entry.id);
+    const statusCase = entries.map((entry) => `WHEN '${entry.id}' THEN '${entry.status}'`).join(' ');
+    const lastErrorCase = entries
+      .map((entry) => `WHEN '${entry.id}' THEN '${entry.lastError.replace(/'/g, "''")}'`)
+      .join(' ');
+    const nextRetryCase = entries
+      .map((entry) =>
+        entry.nextRetryAt
+          ? `WHEN '${entry.id}' THEN '${entry.nextRetryAt.toISOString()}'`
+          : `WHEN '${entry.id}' THEN NULL`,
+      )
+      .join(' ');
+    await this.outbox.query(
+      `
+      UPDATE notification_outbox
+      SET
+        status = CASE id ${statusCase} ELSE status END,
+        last_error = CASE id ${lastErrorCase} ELSE last_error END,
+        next_retry_at = CASE id ${nextRetryCase} ELSE next_retry_at END
+      WHERE tenant_id = ? AND id IN (${ids.map(() => '?').join(',')})
+      `,
+      [tenantId, ...ids],
+    );
+  }
+
+  private async refreshOutboxDepthGauges(): Promise<void> {
+    const rows = await this.outbox
+      .createQueryBuilder('o')
+      .select('o.status', 'status')
+      .addSelect('COUNT(*)', 'cnt')
+      .where('o.tenantId IS NOT NULL')
+      .andWhere('o.tenantId <> :empty', { empty: '' })
+      .groupBy('o.status')
+      .getRawMany<{ status: string; cnt: string }>();
+    let pending = 0;
+    let failed = 0;
+    let sending = 0;
+    for (const row of rows) {
+      const n = Number.parseInt(row.cnt, 10) || 0;
+      if (row.status === 'pending') pending = n;
+      else if (row.status === 'failed') failed = n;
+      else if (row.status === 'sending') sending = n;
+    }
+    this.metrics.setSurvivalQueueDepth('outbox_pending', pending);
+    this.metrics.setSurvivalQueueDepth('outbox_failed', failed);
+    this.metrics.setSurvivalQueueDepth('outbox_sending', sending);
   }
 
   private async sendEmail(row: NotificationOutboxEntity): Promise<void> {

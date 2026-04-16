@@ -16,6 +16,10 @@ export class SmekOrchestrationAuditEntity {
   @Column({ type: 'text' })
   correlationId!: string;
 
+  /** Stable idempotency key for KERNEL_DOMAIN_EVENT rows (e.g. PAYMENT_PROCESSED:tenant:correlation). */
+  @Column({ type: 'text', nullable: true })
+  domainEventKey!: string | null;
+
   @Column({ type: 'text' })
   executionPhase!: string;
 

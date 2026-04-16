@@ -29,6 +29,10 @@ export interface PrdResilienceValidityResult {
   readonly checks: readonly ResilienceCheckItem[];
 }
 
+export interface ProductionGateScope {
+  readonly actor: 'system';
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
     return fallback;
@@ -56,7 +60,7 @@ export class PrdResilienceValidityService {
     private readonly config: ConfigService,
   ) {}
 
-  async runProductionGate(): Promise<PrdResilienceValidityResult> {
+  async runProductionGate(_scope: ProductionGateScope): Promise<PrdResilienceValidityResult> {
     const checks = await Promise.all([
       this.checkCanRecoverExecution(),
       this.checkReplaySafety(),

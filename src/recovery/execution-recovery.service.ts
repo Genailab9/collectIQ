@@ -7,7 +7,7 @@ import { ExecutionLoopPhase } from '../contracts/execution-loop-phase';
 import { SmekKernelService } from '../kernel/smek-kernel.service';
 import type { SmekLoopCommand } from '../kernel/smek-kernel.dto';
 import { SMEK_OUTCOME, type SmekLoopResult } from '../kernel/smek-kernel.dto';
-import { PaymentTransitionQueryService } from '../modules/payment/payment-transition-query.service';
+import { PaymentTransitionQueryService } from '../modules/payment/payment-transition.query';
 import { DataMachineState } from '../state-machine/definitions/data-machine.definition';
 import { PaymentMachineState } from '../state-machine/definitions/payment-machine.definition';
 import { SyncMachineState } from '../state-machine/definitions/sync-machine.definition';
@@ -15,6 +15,7 @@ import { StateTransitionLogEntity } from '../state-machine/entities/state-transi
 import { MachineRegistryService } from '../state-machine/machine-registry.service';
 import { MachineKind } from '../state-machine/types/machine-kind';
 import { StructuredLoggerService } from '../observability/structured-logger.service';
+import { emitRuntimeProof } from '../runtime-proof/runtime-proof-emitter';
 
 const MACHINE_SCAN_ORDER: readonly MachineKind[] = [
   MachineKind.DATA,
@@ -197,6 +198,18 @@ export class ExecutionRecoveryService {
       result: 'RECOVERY_SMEK_DISPATCH',
       surface: 'RECOVERY',
     });
+    emitRuntimeProof({
+      requirement_id: 'REQ-REC-003',
+      event_type: 'WORKER_EXECUTION',
+      tenant_id: t,
+      metadata: {
+        correlationId: c,
+        machine: snapshot.pending.machine,
+        from: snapshot.pending.from,
+        to: snapshot.pending.to,
+        action: 'dispatch',
+      },
+    });
 
     const smekResult = await this.smekKernel.executeLoop(cmd);
     const action = smekResult.outcome === SMEK_OUTCOME.COMPLETED ? 'executed' : 'blocked';
@@ -285,7 +298,13 @@ export class ExecutionRecoveryService {
       if (!allowed || allowed.size === 0) {
         return { kind: 'blocked', reason: `No outgoing transitions from "${current}" on ${machine}.` };
       }
-      const to = pickDeterministicTarget(allowed);
+      const to = pickDeterministicTarget(machine, current, allowed);
+      if (!to) {
+        return {
+          kind: 'blocked',
+          reason: `Recovery target is ambiguous for ${machine} from "${current}".`,
+        };
+      }
       const phase = phaseForMachine(machine);
       const idem = this.buildIdempotencyForEdge(machine, current, to, tenantId, correlationId, views);
       if (!idem) {
@@ -333,6 +352,20 @@ export class ExecutionRecoveryService {
       }
     }
 
+    if (
+      machine === MachineKind.PAYMENT &&
+      from === PaymentMachineState.PROCESSING &&
+      to === PaymentMachineState.SUCCESS
+    ) {
+      return { key: recoveryKey, step: IdempotencyStep.WebhookStripePaymentStatus };
+    }
+    if (machine === MachineKind.CALL) {
+      return { key: recoveryKey, step: IdempotencyStep.WebhookTwilioVoiceStatus };
+    }
+    if (machine === MachineKind.APPROVAL) {
+      return { key: recoveryKey, step: IdempotencyStep.ApprovalOfficerDecision };
+    }
+
     return null;
   }
 
@@ -342,7 +375,7 @@ export class ExecutionRecoveryService {
     borrowerOptedOut: boolean,
   ): SmekLoopCommand | null {
     const { tenantId, correlationId } = snapshot;
-    const { machine, from, to, phase, idempotency } = pending;
+    const { machine, from, to, idempotency } = pending;
 
     if (machine === MachineKind.DATA) {
       return {
@@ -459,6 +492,90 @@ export class ExecutionRecoveryService {
       }
     }
 
+    if (machine === MachineKind.PAYMENT) {
+      if (from === PaymentMachineState.PROCESSING && to === PaymentMachineState.SUCCESS) {
+        return {
+          phase: ExecutionLoopPhase.PAY,
+          transition: {
+            tenantId,
+            correlationId,
+            machine: MachineKind.PAYMENT,
+            from,
+            to,
+            actor: 'execution-recovery',
+            metadata: {
+              recovery: true,
+              recoverySource: 'execution-recovery.service',
+              recoveryKind: 'payment-success-reconcile',
+            },
+          },
+          adapterEnvelope: null,
+          complianceGate: {
+            tenantId,
+            correlationId,
+            executionPhase: ExecutionLoopPhase.PAY,
+            borrowerOptedOut,
+          },
+          paymentIngress: { source: 'GATEWAY_WEBHOOK' },
+          idempotency: { key: idempotency.key, step: idempotency.step },
+        };
+      }
+    }
+    if (machine === MachineKind.CALL) {
+      return {
+        phase: ExecutionLoopPhase.CALL,
+        transition: {
+          tenantId,
+          correlationId,
+          machine: MachineKind.CALL,
+          from,
+          to,
+          actor: 'execution-recovery',
+          metadata: {
+            recovery: true,
+            recoverySource: 'execution-recovery.service',
+            recoveryKind: 'call-status-reconcile',
+          },
+        },
+        adapterEnvelope: null,
+        complianceGate: {
+          tenantId,
+          correlationId,
+          executionPhase: ExecutionLoopPhase.CALL,
+          borrowerOptedOut,
+        },
+        telephonyIngress: { source: 'TWILIO_VOICE_STATUS' },
+        idempotency: { key: idempotency.key, step: idempotency.step },
+      };
+    }
+    if (machine === MachineKind.APPROVAL) {
+      return {
+        phase: ExecutionLoopPhase.APPROVE,
+        transition: {
+          tenantId,
+          correlationId,
+          machine: MachineKind.APPROVAL,
+          from,
+          to,
+          actor: 'execution-recovery',
+          metadata: {
+            recovery: true,
+            recoverySource: 'execution-recovery.service',
+            recoveryKind: 'approval-reconcile',
+          },
+        },
+        adapterEnvelope: null,
+        complianceGate: {
+          tenantId,
+          correlationId,
+          executionPhase: ExecutionLoopPhase.APPROVE,
+          borrowerOptedOut,
+        },
+        approvalIngress: { source: 'OFFICER_API' },
+        idempotency: { key: idempotency.key, step: idempotency.step },
+      };
+    }
+
     return null;
   }
 }
@@ -476,8 +593,67 @@ function toView(row: StateTransitionLogEntity): TransitionLogView {
   };
 }
 
-function pickDeterministicTarget(allowed: ReadonlySet<string>): string {
-  return [...allowed].sort((a, b) => a.localeCompare(b))[0]!;
+function pickDeterministicTarget(
+  machine: MachineKind,
+  from: string,
+  allowed: ReadonlySet<string>,
+): string | null {
+  if (machine === MachineKind.PAYMENT && from === PaymentMachineState.PROCESSING) {
+    if (allowed.has(PaymentMachineState.SUCCESS)) {
+      return PaymentMachineState.SUCCESS;
+    }
+    return null;
+  }
+  if (machine === MachineKind.SYNC) {
+    if (from === SyncMachineState.NOT_STARTED && allowed.has(SyncMachineState.IN_FLIGHT)) {
+      return SyncMachineState.IN_FLIGHT;
+    }
+    if (from === SyncMachineState.IN_FLIGHT && allowed.has(SyncMachineState.CASE_FINALIZED)) {
+      return SyncMachineState.CASE_FINALIZED;
+    }
+    if (from === SyncMachineState.CASE_FINALIZED && allowed.has(SyncMachineState.COMPLETED)) {
+      return SyncMachineState.COMPLETED;
+    }
+    return null;
+  }
+  if (machine === MachineKind.CALL) {
+    const callPreferred: Record<string, string> = {
+      INITIATED: 'RINGING',
+      RINGING: 'CONNECTED',
+      CONNECTED: 'AUTHENTICATED',
+      AUTHENTICATED: 'NEGOTIATING',
+      NEGOTIATING: 'WAITING_APPROVAL',
+      WAITING_APPROVAL: 'PAYMENT_PENDING',
+      PAYMENT_PENDING: 'COMPLETED',
+      RETRY_SCHEDULED: 'INITIATED',
+    };
+    const target = callPreferred[from];
+    if (target && allowed.has(target)) {
+      return target;
+    }
+    return null;
+  }
+  if (machine === MachineKind.APPROVAL) {
+    const approvalPreferred: Record<string, string> = {
+      REQUESTED: 'PENDING',
+      PENDING: 'ESCALATED',
+      COUNTER: 'PENDING',
+      TIMEOUT: 'PENDING',
+      ESCALATED: 'PENDING',
+    };
+    const target = approvalPreferred[from];
+    if (target && allowed.has(target)) {
+      return target;
+    }
+    return null;
+  }
+  if (machine === MachineKind.DATA) {
+    if (from === DataMachineState.NOT_STARTED && allowed.has(DataMachineState.COMPLETED)) {
+      return DataMachineState.COMPLETED;
+    }
+    return null;
+  }
+  return null;
 }
 
 function phaseForMachine(machine: MachineKind): ExecutionLoopPhase {

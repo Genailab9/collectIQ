@@ -3,7 +3,13 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TenantFeatureFlagEntity } from './tenant-feature-flag.entity';
 
-export type ExecutionFeatureFlagKey = 'DEMO_MODE' | 'SIMULATE_CALLS' | 'FORCE_PAYMENT_SUCCESS';
+export type ExecutionFeatureFlagKey =
+  | 'DEMO_MODE'
+  | 'SIMULATE_CALLS'
+  | 'FORCE_PAYMENT_SUCCESS'
+  | 'SIMULATE_PAYMENT_FAILURE'
+  | 'SIMULATE_APPROVAL_TIMEOUT'
+  | 'SIMULATE_CALL_FAILURE';
 
 type CacheEntry = { expiresAt: number; value: unknown | undefined };
 

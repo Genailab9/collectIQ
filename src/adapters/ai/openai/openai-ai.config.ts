@@ -13,4 +13,9 @@ export class OpenAiAiConfig {
   get negotiationModel(): string {
     return this.config.get<string>('OPENAI_NEGOTIATION_MODEL') ?? 'gpt-4o-mini';
   }
+
+  get bootMode(): 'strict' | 'demo-safe' {
+    const mode = this.config.get<string>('APP_BOOT_MODE')?.trim().toLowerCase();
+    return mode === 'strict' ? 'strict' : 'demo-safe';
+  }
 }

@@ -3,10 +3,13 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColum
 export type SurvivalJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'dead';
 
 @Entity({ name: 'survival_job' })
-@Index(['queue', 'status', 'runAfter'])
+@Index(['tenantId', 'queue', 'status', 'runAfter'])
 export class SurvivalJobEntity {
   @PrimaryColumn({ type: 'varchar', length: 36 })
   id!: string;
+
+  @Column({ type: 'varchar', length: 128, default: 'admin-plane' })
+  tenantId!: string;
 
   @Column({ type: 'varchar', length: 64 })
   queue!: string;
