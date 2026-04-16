@@ -46,7 +46,6 @@ function IngestionContent() {
   const campaignsQuery = useQuery({
     queryKey: ["campaigns"],
     queryFn: () => listCampaignsApi(),
-    refetchInterval: 60_000,
   });
 
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
@@ -145,7 +144,11 @@ function IngestionContent() {
         <Link href="/campaigns" className="underline">
           campaigns
         </Link>{" "}
-        page first.
+        page first. Canonical upload route:{" "}
+        <Link href="/data-ingestion/upload" className="underline">
+          /data-ingestion/upload
+        </Link>
+        .
       </p>
 
       <Card>

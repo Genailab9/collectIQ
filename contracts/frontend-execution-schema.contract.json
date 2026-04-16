@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "streamSchema": {
+    "acceptedMajor": 1,
+    "acceptedMinors": ["1.0"],
+    "compatibilityPolicy": {
+      "mode": "semver_major_locked",
+      "allowedTransitions": ["1.x->1.x"],
+      "forbiddenTransitions": ["2.x->1.x", "1.x->2.x"]
+    },
+    "requiredEventFields": ["schemaVersion", "envelope", "tenantId", "correlationId"],
+    "requiredByEnvelope": {
+      "DOMAIN_EVENT": ["eventType"],
+      "STATE_TRANSITION": ["machine", "from", "to"],
+      "WEBHOOK_EVENT": ["provider", "kind", "outcome"]
+    }
+  },
+  "executionStoreSchema": {
+    "version": "1.0",
+    "requiredCaseFields": [
+      "correlationId",
+      "tenantId",
+      "lastEnvelope",
+      "lastUpdatedAtMs",
+      "lastTransitionMachine",
+      "machineStates",
+      "counters"
+    ]
+  }
+}

@@ -1,19 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { approveRequest, fetchPendingApprovals, rejectRequest } from "@/lib/api-client";
+import {
+  approveRequest,
+  counterOfferRequest,
+  fetchCollectiqFeatureFlags,
+  fetchPendingApprovals,
+  getExecutionTrace,
+  rejectRequest,
+} from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SkeletonTable } from "@/components/ui/skeleton-table";
 import { useToast } from "@/components/ui/toast-provider";
 import { labelState } from "@/lib/state-copy";
-
-const POLL_MS = 8000;
+import { cn } from "@/lib/utils";
 const QUERY_KEY = ["approvals-pending"] as const;
 
 export function ApprovalQueueCard() {
   const [officerId, setOfficerId] = useState("officer-1");
+  const [counterOfferByCase, setCounterOfferByCase] = useState<Record<string, string>>({});
+  const [historyCaseId, setHistoryCaseId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [singleBusyId, setSingleBusyId] = useState<string | null>(null);
   const { showToast } = useToast();
@@ -22,15 +33,39 @@ export function ApprovalQueueCard() {
   const pendingQuery = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => fetchPendingApprovals(),
-    refetchInterval: POLL_MS,
+    retry: 1,
+  });
+  const flagsQuery = useQuery({
+    queryKey: ["feature-flags", "approvals"],
+    queryFn: () => fetchCollectiqFeatureFlags(),
+    retry: 1,
+  });
+  const historyQuery = useQuery({
+    queryKey: ["approval-history", historyCaseId],
+    queryFn: () => getExecutionTrace(historyCaseId ?? ""),
+    enabled: !!historyCaseId,
     retry: 1,
   });
 
-  const sorted = [...(pendingQuery.data ?? [])].sort(
-    (a, b) => (b.priority?.score ?? 0) - (a.priority?.score ?? 0),
+  const sorted = useMemo(
+    () =>
+      [...(pendingQuery.data ?? [])].sort(
+        (a, b) => (b.priority?.score ?? 0) - (a.priority?.score ?? 0),
+      ),
+    [pendingQuery.data],
   );
-  const selectedSet = new Set(selected);
-  const allSelected = sorted.length > 0 && sorted.every((x) => selectedSet.has(x.correlationId));
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const allSelected = useMemo(
+    () => sorted.length > 0 && sorted.every((x) => selectedSet.has(x.correlationId)),
+    [selectedSet, sorted],
+  );
+  const toggleSelected = useCallback((correlationId: string) => {
+    setSelected((prev) =>
+      prev.includes(correlationId)
+        ? prev.filter((x) => x !== correlationId)
+        : [...prev, correlationId],
+    );
+  }, []);
 
   const bulkMutation = useMutation({
     mutationFn: async (mode: "approve" | "reject") => {
@@ -69,7 +104,11 @@ export function ApprovalQueueCard() {
       }),
   });
 
-  const runSingleDecision = async (correlationId: string, fromState: string, mode: "approve" | "reject") => {
+  const runSingleDecision = async (
+    correlationId: string,
+    fromState: string,
+    mode: "approve" | "reject" | "counter",
+  ) => {
     setSingleBusyId(correlationId);
     try {
       if (mode === "approve") {
@@ -78,22 +117,35 @@ export function ApprovalQueueCard() {
           fromState,
           officerId: officerId.trim() || "officer-1",
         });
-      } else {
+      } else if (mode === "reject") {
         await rejectRequest({
           correlationId,
           fromState,
           officerId: officerId.trim() || "officer-1",
         });
+      } else {
+        const raw = counterOfferByCase[correlationId] ?? "";
+        const counterOfferAmountCents = Number(raw);
+        if (!Number.isInteger(counterOfferAmountCents) || counterOfferAmountCents <= 0) {
+          throw new Error("Counter offer must be a positive amount in cents.");
+        }
+        await counterOfferRequest({
+          correlationId,
+          fromState,
+          officerId: officerId.trim() || "officer-1",
+          counterOfferAmountCents,
+        });
       }
       await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       showToast({
-        title: mode === "approve" ? "Case approved" : "Case rejected",
+        title: mode === "approve" ? "Case approved" : mode === "reject" ? "Case rejected" : "Counter offer sent",
         description: correlationId,
         variant: "success",
       });
     } catch (error) {
       showToast({
-        title: mode === "approve" ? "Approve failed" : "Reject failed",
+        title:
+          mode === "approve" ? "Approve failed" : mode === "reject" ? "Reject failed" : "Counter offer failed",
         description: (error as { message?: string })?.message ?? "Action failed.",
         variant: "error",
       });
@@ -109,7 +161,7 @@ export function ApprovalQueueCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Loaded from <span className="font-mono">GET /approvals/pending</span> (refreshes every {POLL_MS / 1000}s).
+          Loaded from <span className="font-mono">GET /approvals/pending</span> (shared domain polling).
         </p>
 
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
@@ -164,40 +216,49 @@ export function ApprovalQueueCard() {
           </div>
         ) : null}
 
-        {pendingQuery.isLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-20 animate-pulse rounded-md border bg-muted/40" />
-            ))}
-          </div>
-        ) : null}
+        {pendingQuery.isLoading ? <SkeletonTable rows={4} /> : null}
 
         {!pendingQuery.isLoading && sorted.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No pending approvals.</p>
+          <div className="rounded-md border border-dashed p-5 text-center">
+            <p className="text-sm text-muted-foreground">No pending approvals.</p>
+            {flagsQuery.data?.flags?.DEMO_MODE ? (
+              <Link href="/demo" className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "mt-3")}>
+                Run Demo Seed
+              </Link>
+            ) : null}
+          </div>
         ) : null}
 
         {sorted.length > 0 ? (
           <div className="space-y-3">
+            <AnimatePresence initial={false}>
             {sorted.map((item) => {
               const checked = selectedSet.has(item.correlationId);
+              const riskScore = Math.min(100, Math.max(0, item.priority?.score ?? 0));
+              const confidence = Math.min(100, Math.max(35, 100 - Math.floor(riskScore / 1.5)));
               return (
-                <div key={item.correlationId} className="space-y-2 rounded-md border p-3">
+                <motion.div
+                  key={item.correlationId}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ duration: 0.2, ease: "easeOut" }}
+                  className="space-y-2 rounded-md border p-3"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
                         checked={checked}
-                        onChange={() =>
-                          setSelected((prev) =>
-                            prev.includes(item.correlationId)
-                              ? prev.filter((x) => x !== item.correlationId)
-                              : [...prev, item.correlationId],
-                          )
-                        }
+                        onChange={() => toggleSelected(item.correlationId)}
                       />
                       <span className="font-mono text-sm font-medium">{item.correlationId}</span>
                     </label>
-                    <Badge variant="secondary">{labelState(item.currentState)}</Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">Risk {riskScore}</Badge>
+                      <Badge variant="secondary">Confidence {confidence}%</Badge>
+                      <Badge variant="secondary">{labelState(item.currentState)}</Badge>
+                    </div>
                   </div>
                   <div className="grid gap-2 text-sm md:grid-cols-2">
                     <div>
@@ -237,10 +298,66 @@ export function ApprovalQueueCard() {
                     >
                       {singleBusyId === item.correlationId ? "Working..." : "Reject"}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={bulkMutation.isPending || singleBusyId === item.correlationId}
+                      onClick={() => runSingleDecision(item.correlationId, item.currentState, "counter")}
+                    >
+                      {singleBusyId === item.correlationId ? "Working..." : "Counter Offer"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setHistoryCaseId((prev) => (prev === item.correlationId ? null : item.correlationId))
+                      }
+                    >
+                      {historyCaseId === item.correlationId ? "Hide History" : "Show History"}
+                    </Button>
                   </div>
-                </div>
+                  <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                    <input
+                      value={counterOfferByCase[item.correlationId] ?? ""}
+                      onChange={(e) =>
+                        setCounterOfferByCase((prev) => ({ ...prev, [item.correlationId]: e.target.value }))
+                      }
+                      type="number"
+                      min={1}
+                      placeholder="Counter offer (cents)"
+                      className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                    />
+                    <p className="flex items-center text-xs text-muted-foreground">
+                      Sends APPROVAL decision=COUNTER and reopens negotiation.
+                    </p>
+                  </div>
+                  {historyCaseId === item.correlationId ? (
+                    <div className="rounded-md border bg-muted/30 p-3 text-xs">
+                      <p className="mb-2 font-medium">Negotiation History</p>
+                      {historyQuery.isLoading ? (
+                        <p className="text-muted-foreground">Loading history...</p>
+                      ) : historyQuery.isError ? (
+                        <p className="text-destructive">
+                          {(historyQuery.error as { message?: string })?.message ?? "Failed to load history."}
+                        </p>
+                      ) : (
+                        <div className="space-y-1">
+                          {(historyQuery.data?.transitions ?? [])
+                            .filter((t) => t.machine === "CALL" || t.machine === "APPROVAL")
+                            .slice(-8)
+                            .map((t, idx) => (
+                              <p key={`${t.occurredAt}-${idx}`} className="font-mono text-[11px]">
+                                {new Date(t.occurredAt).toLocaleTimeString()} · {t.machine} {t.from} → {t.to}
+                              </p>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </motion.div>
               );
             })}
+            </AnimatePresence>
           </div>
         ) : null}
       </CardContent>

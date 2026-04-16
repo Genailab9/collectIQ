@@ -11,8 +11,16 @@ export type SessionPayload = {
 
 export { SESSION_COOKIE, ONBOARDING_COOKIE };
 
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    throw new Error(`${name} is required.`);
+  }
+  return value;
+}
+
 function sessionSecret(): string {
-  return process.env.COLLECTIQ_SESSION_SECRET?.trim() || "collectiq-dev-session-secret";
+  return requiredEnv("COLLECTIQ_SESSION_SECRET");
 }
 
 function sign(payloadBase64: string): string {

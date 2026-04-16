@@ -5,6 +5,7 @@ import { useMutation } from "@tanstack/react-query";
 import {
   approveRequest,
   confirmPayment,
+  counterOfferRequest,
   createPaymentIntent,
   rejectRequest,
   submitForApproval,
@@ -31,7 +32,9 @@ export function ActionPanel({
   machineStates: MachineStates;
 }) {
   const [officerId, setOfficerId] = useState("officer-1");
+  const [counterOfferAmountCents, setCounterOfferAmountCents] = useState(2000);
   const [amountCents, setAmountCents] = useState(2500);
+  const [paymentId, setPaymentId] = useState("");
   const [gatewayPaymentIntentId, setGatewayPaymentIntentId] = useState("");
   const [lastFailedAction, setLastFailedAction] = useState<null | (() => void)>(null);
   const { showToast } = useToast();
@@ -127,6 +130,27 @@ export function ActionPanel({
       });
     },
   });
+  const counterMutation = useMutation({
+    mutationFn: () =>
+      counterOfferRequest({
+        correlationId,
+        fromState: machineStates.APPROVAL === "NOT_STARTED" ? "PENDING" : machineStates.APPROVAL,
+        officerId,
+        counterOfferAmountCents,
+      }),
+    onSuccess: () => {
+      setLastFailedAction(null);
+      showToast({ title: "Counter offer submitted", variant: "success" });
+    },
+    onError: (error) => {
+      setLastFailedAction(() => () => counterMutation.mutate());
+      showToast({
+        title: "Counter offer failed",
+        description: (error as { message?: string })?.message ?? "Request failed.",
+        variant: "error",
+      });
+    },
+  });
   const createIntentMutation = useMutation({
     mutationFn: () =>
       createPaymentIntent({
@@ -134,11 +158,12 @@ export function ActionPanel({
         approvalCorrelationId: correlationId,
       }),
     onSuccess: (data) => {
+      setPaymentId(data.paymentId);
       setGatewayPaymentIntentId(data.gatewayPaymentIntentId);
       setLastFailedAction(null);
       showToast({
         title: "Payment intent created",
-        description: data.gatewayPaymentIntentId,
+        description: `${data.paymentId} · ${data.gatewayPaymentIntentId}`,
         variant: "success",
       });
     },
@@ -154,7 +179,7 @@ export function ActionPanel({
   const confirmMutation = useMutation({
     mutationFn: () =>
       confirmPayment({
-        paymentId: correlationId,
+        paymentId,
         gatewayPaymentIntentId,
       }),
     onSuccess: () => {
@@ -177,6 +202,7 @@ export function ActionPanel({
     submitApprovalMutation.isPending ||
     approveMutation.isPending ||
     rejectMutation.isPending ||
+    counterMutation.isPending ||
     createIntentMutation.isPending ||
     confirmMutation.isPending;
 
@@ -225,7 +251,21 @@ export function ActionPanel({
               >
                 Reject
               </Button>
+              <Button
+                variant="secondary"
+                disabled={anyLoading || isOperator || counterOfferAmountCents <= 0}
+                onClick={() => counterMutation.mutate()}
+              >
+                Counter
+              </Button>
             </div>
+            <input
+              value={counterOfferAmountCents}
+              onChange={(e) => setCounterOfferAmountCents(Number(e.target.value) || 0)}
+              type="number"
+              placeholder="Counter offer cents"
+              className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+            />
           </div>
         ) : null}
 
@@ -243,7 +283,7 @@ export function ActionPanel({
                 Create Payment Intent
               </Button>
               <Button
-                disabled={anyLoading || !gatewayPaymentIntentId.trim() || isOperator}
+                disabled={anyLoading || !paymentId.trim() || !gatewayPaymentIntentId.trim() || isOperator}
                 onClick={() => confirmMutation.mutate()}
               >
                 Confirm Payment
@@ -251,6 +291,11 @@ export function ActionPanel({
             </div>
             {isOperator ? (
               <p className="text-xs text-muted-foreground">Operator role cannot reject or confirm payment.</p>
+            ) : null}
+            {gatewayPaymentIntentId ? (
+              <p className="text-xs text-muted-foreground">
+                Payment ID: <span className="font-mono text-foreground">{paymentId}</span>
+              </p>
             ) : null}
             {gatewayPaymentIntentId ? (
               <p className="text-xs text-muted-foreground">

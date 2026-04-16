@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "policyVersion": "governance-kernel-v1",
+  "browserApiPrefix": "/api/collectiq/",
+  "frontendMetricSinkPath": "/api/collectiq/api/v1/metrics/frontend",
+  "protectedFlags": [
+    "ALLOW_TRACE_FULL",
+    "DISABLE_TRACE_FULL",
+    "BYPASS_TENANT_ISOLATION"
+  ],
+  "traceAccess": {
+    "actorRoles": [
+      "ADMIN",
+      "SYSTEM"
+    ],
+    "tenantFlag": "ALLOW_TRACE_FULL",
+    "killSwitch": "DISABLE_TRACE_FULL",
+    "requireDebugHeader": true
+  }
+}

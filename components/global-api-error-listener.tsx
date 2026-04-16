@@ -44,7 +44,7 @@ export function GlobalApiErrorListener() {
       }
       if (status === 429) {
         showToast({
-          variant: "info",
+          variant: "warning",
           title: "Rate limited",
           description: `${message} Use smaller batches or wait before retrying the same action.`,
         });

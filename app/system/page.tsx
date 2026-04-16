@@ -2,24 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-async function fetchHealth() {
-  const res = await fetch("/api/saas/admin/health", { cache: "no-store" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message || "Failed to load system health.");
-  }
-  return res.json() as Promise<{
-    recoveryWorkerEnabled: boolean;
-    webhookRecoveryEnabled: boolean;
-    featureFlags: Record<string, boolean>;
-    circuits: Array<{ circuitKey: string; consecutiveFailures: number; circuitOpenUntilIso: string | null }>;
-    metricsSample: string;
-  }>;
-}
+import { fetchAdminSystemHealth } from "@/lib/api-client";
 
 export default function SystemHealthPage() {
-  const q = useQuery({ queryKey: ["system-health"], queryFn: fetchHealth, retry: 1 });
+  const q = useQuery({ queryKey: ["system-health"], queryFn: fetchAdminSystemHealth, retry: 1 });
 
   return (
     <div className="space-y-4">

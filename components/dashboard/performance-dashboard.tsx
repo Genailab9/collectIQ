@@ -1,10 +1,11 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { fetchDashboardMetrics } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-const REFETCH_MS = 30_000;
+import { SkeletonCard } from "@/components/ui/skeleton-card";
+import { usePollingPolicy } from "@/hooks/usePollingPolicy";
 
 function formatAvgResolution(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) {
@@ -23,10 +24,11 @@ function formatAvgResolution(ms: number): string {
 }
 
 export function PerformanceDashboard() {
+  const refetchInterval = usePollingPolicy({ mode: "idle" });
   const metricsQuery = useQuery({
     queryKey: ["dashboard-metrics"],
     queryFn: () => fetchDashboardMetrics(),
-    refetchInterval: REFETCH_MS,
+    refetchInterval,
     retry: 1,
   });
 
@@ -45,6 +47,15 @@ export function PerformanceDashboard() {
   }
 
   const m = metricsQuery.data;
+  if (metricsQuery.isLoading) {
+    return (
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <SkeletonCard key={i} />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <Card>
@@ -53,8 +64,7 @@ export function PerformanceDashboard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-muted-foreground">
-          Values are derived from the transition log for the current tenant (refreshes every{" "}
-          {REFETCH_MS / 1000}s).
+          Values are derived from the transition log for the current tenant (managed by centralized polling).
         </p>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Metric
@@ -82,9 +92,14 @@ export function PerformanceDashboard() {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border p-3">
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2, ease: "easeOut" }}
+      className="rounded-md border p-3"
+    >
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="text-xl font-semibold">{value}</div>
-    </div>
+    </motion.div>
   );
 }

@@ -4,7 +4,7 @@ import { SESSION_COOKIE } from "@/lib/session-constants";
 import { verifySessionToken } from "@/lib/session";
 
 export async function requireAdminSession(): Promise<
-  | { ok: true; username: string }
+  | { ok: true; username: string; role: "ADMIN" }
   | { ok: false; response: NextResponse }
 > {
   const jar = await cookies();
@@ -16,5 +16,5 @@ export async function requireAdminSession(): Promise<
       response: NextResponse.json({ message: "Admin access required." }, { status: 403 }),
     };
   }
-  return { ok: true, username: session.username };
+  return { ok: true, username: session.username, role: "ADMIN" };
 }

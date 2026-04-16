@@ -1,4 +1,7 @@
 const STATE_LABELS: Record<string, string> = {
+  CALL_FAILED: "Call Failed",
+  APPROVAL_TIMEOUT: "Approval Timed Out",
+  PAYMENT_PROCESSING: "Payment Processing",
   SUCCESS: "Payment Completed",
   FAILED: "Payment Failed",
   PROCESSING: "Processing Payment",
@@ -8,7 +11,10 @@ const STATE_LABELS: Record<string, string> = {
   REJECTED: "Rejected",
   PENDING: "Pending Review",
   REQUESTED: "Approval Requested",
+  COUNTER: "Counter Offer",
+  COUNTERED: "Counter Offer",
   ESCALATED: "Escalated",
+  TIMEOUT: "Approval Timed Out",
   COMPLETED: "Completed",
   AUTHENTICATED: "Authenticated",
   NEGOTIATING: "Negotiating",
@@ -28,10 +34,14 @@ export function stateTone(raw: string | null | undefined): "success" | "warning"
   if (["SUCCESS", "APPROVED", "COMPLETED"].includes(key)) {
     return "success";
   }
-  if (["FAILED", "REJECTED", "DISPUTED"].includes(key)) {
+  if (["FAILED", "REJECTED", "DISPUTED", "CALL_FAILED"].includes(key)) {
     return "error";
   }
-  if (["PROCESSING", "PENDING", "WAITING_APPROVAL", "ESCALATED", "INITIATED"].includes(key)) {
+  if (
+    ["PROCESSING", "PAYMENT_PROCESSING", "PENDING", "WAITING_APPROVAL", "ESCALATED", "INITIATED", "TIMEOUT", "APPROVAL_TIMEOUT"].includes(
+      key,
+    )
+  ) {
     return "warning";
   }
   return "neutral";

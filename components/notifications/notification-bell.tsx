@@ -8,22 +8,18 @@ import { fetchPendingApprovals, fetchPendingPayments } from "@/lib/api-client";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-const POLL_MS = 60_000;
-
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
 
   const approvalsQuery = useQuery({
-    queryKey: ["approvals-pending", "bell"],
+    queryKey: ["approvals-pending"],
     queryFn: () => fetchPendingApprovals(),
-    refetchInterval: POLL_MS,
     retry: 1,
   });
 
   const paymentsQuery = useQuery({
-    queryKey: ["payments-pending", "bell"],
+    queryKey: ["payments-pending"],
     queryFn: () => fetchPendingPayments(),
-    refetchInterval: POLL_MS,
     retry: 1,
   });
 
@@ -46,7 +42,7 @@ export function NotificationBell() {
         <div className="absolute right-0 z-40 mt-2 w-80 rounded-md border bg-background p-3 shadow-xl">
           <p className="mb-2 text-sm font-medium">Work queues</p>
           <p className="mb-3 text-xs text-muted-foreground">
-            Counts from live APIs (refreshed every {POLL_MS / 1000}s while the app is open).
+            Counts from live APIs (shared domain polling is managed centrally).
           </p>
           <div className="space-y-2 text-sm">
             <div className="flex items-center justify-between rounded border p-2">

@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createCampaignApi, getAnalyticsCampaign, listCampaignsApi } from "@/lib/api-client";
+import { createCampaignApi, fetchCollectiqFeatureFlags, getAnalyticsCampaign, listCampaignsApi } from "@/lib/api-client";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { SkeletonTable } from "@/components/ui/skeleton-table";
 import { useToast } from "@/components/ui/toast-provider";
 
 export default function CampaignsPage() {
@@ -19,7 +20,6 @@ export default function CampaignsPage() {
   const listQuery = useQuery({
     queryKey: ["campaigns"],
     queryFn: () => listCampaignsApi(),
-    refetchInterval: 60_000,
   });
 
   const createMutation = useMutation({
@@ -42,6 +42,11 @@ export default function CampaignsPage() {
         variant: "error",
       });
     },
+  });
+  const flagsQuery = useQuery({
+    queryKey: ["feature-flags", "campaigns"],
+    queryFn: () => fetchCollectiqFeatureFlags(),
+    retry: 1,
   });
 
   const analyticsQuery = useQuery({
@@ -90,14 +95,24 @@ export default function CampaignsPage() {
           <CardTitle>Your campaigns</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
-          {listQuery.isLoading ? <p className="text-muted-foreground">Loading…</p> : null}
+          {listQuery.isLoading ? <SkeletonTable rows={4} /> : null}
           {listQuery.isError ? (
             <p className="text-destructive">
               {(listQuery.error as { message?: string })?.message ?? "Failed to load campaigns."}
             </p>
           ) : null}
           {!listQuery.isLoading && (listQuery.data?.length ?? 0) === 0 ? (
-            <p className="text-muted-foreground">No campaigns yet. Create one above.</p>
+            <div className="rounded-md border border-dashed p-5 text-center">
+              <p className="text-muted-foreground">No campaigns yet. Create one above.</p>
+              {flagsQuery.data?.flags?.DEMO_MODE ? (
+                <Link
+                  href="/demo"
+                  className={cn(buttonVariants({ size: "sm", variant: "secondary" }), "mt-3")}
+                >
+                  Run Demo Seed
+                </Link>
+              ) : null}
+            </div>
           ) : null}
           <ul className="space-y-2">
             {(listQuery.data ?? []).map((c) => (
@@ -112,10 +127,16 @@ export default function CampaignsPage() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Link
-                    href={`/ingestion?campaignId=${encodeURIComponent(c.id)}`}
+                    href={`/data-ingestion/upload?campaignId=${encodeURIComponent(c.id)}`}
                     className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
                   >
                     Upload CSV
+                  </Link>
+                  <Link
+                    href={`/campaigns/${encodeURIComponent(c.id)}`}
+                    className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                  >
+                    Open campaign
                   </Link>
                   <Button size="sm" variant="outline" onClick={() => setSelectedId(c.id)}>
                     View analytics

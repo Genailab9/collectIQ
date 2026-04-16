@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { loginCollectiq } from "@/lib/api-client";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
@@ -18,15 +19,7 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { message?: string };
-        throw new Error(body.message || "Login failed.");
-      }
+      await loginCollectiq(username, password);
       const next = search.get("next") || "/dashboard";
       router.replace(next);
     } catch (err) {
@@ -62,9 +55,7 @@ export default function LoginPage() {
             </Button>
           </form>
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
-          <p className="text-xs text-muted-foreground">
-            Default users: admin/admin123 or operator/operator123
-          </p>
+          <p className="text-xs text-muted-foreground">Use credentials configured via server environment variables.</p>
         </CardContent>
       </Card>
     </div>

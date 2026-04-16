@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast-provider";
+import { activateOnboarding } from "@/lib/api-client";
 
 const STEPS = ["Create Tenant", "Configure Compliance", "Integrations", "Confirm + Activate"] as const;
 
@@ -45,7 +46,7 @@ export default function OnboardingPage() {
         },
       };
       window.localStorage.setItem("collectiq:onboarding", JSON.stringify(payload));
-      await fetch("/api/onboarding/activate", { method: "POST" });
+      await activateOnboarding();
       showToast({ title: "Tenant activated", variant: "success" });
       router.replace("/dashboard");
     } catch (error) {

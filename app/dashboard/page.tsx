@@ -7,23 +7,36 @@ import { ExecutionSummaryCard } from "@/components/execution/execution-summary-c
 import { MachineStateCard } from "@/components/execution/machine-state-card";
 import { ActionPanel } from "@/components/execution/action-panel";
 import { PerformanceDashboard } from "@/components/dashboard/performance-dashboard";
+import { ApprovalSlaCard } from "@/components/analytics/approval-sla-card";
 import { SystemActivityFeed } from "@/components/system/system-activity-feed";
+import { SmekTerminalPanel } from "@/components/system/smek-terminal-panel";
 import { TimelinePanel } from "@/components/timeline/timeline-panel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getExecutionTrace } from "@/lib/api-client";
+import { usePollingPolicy } from "@/hooks/usePollingPolicy";
+import { useGlobalEventStream } from "@/lib/event-stream-context";
+import { canUsePollingFallback } from "@/lib/policy/frontend-policy";
 
 const MACHINES = ["CALL", "APPROVAL", "PAYMENT", "SYNC"] as const;
 
 export default function DashboardPage() {
   const [inputCorrelationId, setInputCorrelationId] = useState("");
   const [activeCorrelationId, setActiveCorrelationId] = useState("");
+  const stream = useGlobalEventStream();
+  const pollingFallbackEnabled = canUsePollingFallback(stream, activeCorrelationId.trim().length > 0);
+  const traceRefetchInterval = usePollingPolicy({
+    mode: "active",
+    enabled: pollingFallbackEnabled,
+    sseConnected: stream.sseConnected,
+    sseFailed: stream.sseFailed,
+  });
 
   const traceQuery = useQuery({
     queryKey: ["execution-trace", activeCorrelationId],
     queryFn: () => getExecutionTrace(activeCorrelationId),
     enabled: activeCorrelationId.trim().length > 0,
-    refetchInterval: 5000,
+    refetchInterval: traceRefetchInterval,
   });
 
   const machineStates = useMemo(() => {
@@ -52,9 +65,14 @@ export default function DashboardPage() {
     traceQuery.data?.transitions[traceQuery.data.transitions.length - 1]?.occurredAt ?? null;
 
   return (
-    <div className="space-y-4">
+    <div className="grid gap-4 xl:grid-cols-[1fr_360px]">
+      <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Live Execution Dashboard</h1>
+      <p className="text-sm text-muted-foreground">
+        Demo choreography: seed from Demo Cockpit, show live activity, approve a case, then confirm payment and open full timeline.
+      </p>
       <PerformanceDashboard />
+      <ApprovalSlaCard />
       <Card>
         <CardHeader>
           <CardTitle>Trace Lookup</CardTitle>
@@ -120,7 +138,11 @@ export default function DashboardPage() {
           <TimelinePanel trace={traceQuery.data} />
         </>
       ) : null}
-      <SystemActivityFeed />
+      <SmekTerminalPanel />
+      </div>
+      <div className="space-y-4">
+        <SystemActivityFeed compact />
+      </div>
     </div>
   );
 }

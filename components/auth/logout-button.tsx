@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { logoutCollectiq } from "@/lib/api-client";
 
 export function LogoutButton() {
   const router = useRouter();
@@ -10,7 +11,7 @@ export function LogoutButton() {
       size="sm"
       variant="outline"
       onClick={async () => {
-        await fetch("/api/auth/logout", { method: "POST" });
+        await logoutCollectiq();
         router.replace("/login");
       }}
     >

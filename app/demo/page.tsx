@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import {
   fetchActiveExecutions,
   fetchCollectiqFeatureFlags,
@@ -11,9 +12,10 @@ import {
   postDemoSeed,
 } from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast-provider";
+import { cn } from "@/lib/utils";
 
 function asBool(v: unknown): boolean {
   return v === true || v === "true" || v === 1 || v === "1";
@@ -22,11 +24,11 @@ function asBool(v: unknown): boolean {
 export default function DemoPage() {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
-  const health = useQuery({ queryKey: ["health"], queryFn: () => fetchHealth(), refetchInterval: 15000, retry: 1 });
-  const flags = useQuery({ queryKey: ["feature-flags"], queryFn: () => fetchCollectiqFeatureFlags(), refetchInterval: 10000 });
-  const approvals = useQuery({ queryKey: ["approvals-pending", "demo"], queryFn: () => fetchPendingApprovals(), refetchInterval: 5000 });
-  const payments = useQuery({ queryKey: ["payments-pending", "demo"], queryFn: () => fetchPendingPayments(), refetchInterval: 5000 });
-  const active = useQuery({ queryKey: ["execution-active", "demo"], queryFn: () => fetchActiveExecutions(), refetchInterval: 5000 });
+  const health = useQuery({ queryKey: ["health"], queryFn: () => fetchHealth(), retry: 1 });
+  const flags = useQuery({ queryKey: ["feature-flags"], queryFn: () => fetchCollectiqFeatureFlags() });
+  const approvals = useQuery({ queryKey: ["approvals-pending"], queryFn: () => fetchPendingApprovals() });
+  const payments = useQuery({ queryKey: ["payments-pending"], queryFn: () => fetchPendingPayments() });
+  const active = useQuery({ queryKey: ["execution-active"], queryFn: () => fetchActiveExecutions() });
 
   const seed = useMutation({
     mutationFn: () => postDemoSeed(),
@@ -77,10 +79,37 @@ export default function DemoPage() {
   const demoOn = asBool(flags.data?.flags?.DEMO_MODE);
   const simOn = asBool(flags.data?.flags?.SIMULATE_CALLS);
   const forcePayOn = asBool(flags.data?.flags?.FORCE_PAYMENT_SUCCESS);
+  const canRunDemo = demoOn && simOn && forcePayOn;
 
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold">Demo Control Cockpit</h1>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">10-Minute Demo Flow</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 text-sm md:grid-cols-2">
+          <ol className="list-inside list-decimal space-y-1 text-muted-foreground">
+            <li>Seed demo data</li>
+            <li>Open dashboard and show activity stream</li>
+            <li>Approve one pending case</li>
+            <li>Confirm one payment</li>
+            <li>Open case timeline for full trace</li>
+            <li>Reset demo data</li>
+          </ol>
+          <div className="flex flex-wrap items-start gap-2">
+            <Link href="/dashboard" className={cn(buttonVariants({ size: "sm", variant: "secondary" }))}>
+              Open Dashboard
+            </Link>
+            <Link href="/approvals" className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>
+              Open Approvals
+            </Link>
+            <Link href="/payments" className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>
+              Open Payments
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader><CardTitle className="text-base">System Health</CardTitle></CardHeader>
@@ -113,13 +142,20 @@ export default function DemoPage() {
         <CounterCard title="Active Executions" count={active.data?.length} loading={active.isLoading} error={active.isError} />
         <Card>
           <CardHeader><CardTitle className="text-base">Demo Actions</CardTitle></CardHeader>
-          <CardContent className="flex flex-wrap gap-2">
-            <Button disabled={seed.isPending || reset.isPending} onClick={() => seed.mutate()}>
+          <CardContent className="space-y-3">
+            <p className={`text-xs ${canRunDemo ? "text-emerald-600 dark:text-emerald-300" : "text-amber-600 dark:text-amber-300"}`}>
+              {canRunDemo
+                ? "Ready: demo-safe simulation flags are enabled."
+                : "Enable DEMO_MODE + SIMULATE_CALLS + FORCE_PAYMENT_SUCCESS before seeding."}
+            </p>
+            <div className="flex flex-wrap gap-2">
+            <Button disabled={seed.isPending || reset.isPending || !canRunDemo} onClick={() => seed.mutate()}>
               {seed.isPending ? "Seeding..." : "Seed Demo Data"}
             </Button>
             <Button variant="secondary" disabled={seed.isPending || reset.isPending} onClick={() => reset.mutate()}>
               {reset.isPending ? "Resetting..." : "Reset Demo"}
             </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

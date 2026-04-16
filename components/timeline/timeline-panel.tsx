@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
+import { motion } from "framer-motion";
 import type { ExecutionTrace } from "@/lib/api-client";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,8 +66,16 @@ export function TimelinePanel({ trace }: { trace?: ExecutionTrace | null }) {
           <div className="relative pl-6">
             <div className="absolute left-[9px] top-0 h-full w-px bg-border" />
             <div className="space-y-4">
-              {transitions.map((t, idx) => (
-                <div key={`${t.occurredAt}-${idx}`} className="relative rounded-lg border p-3">
+              {transitions.map((t, idx) => {
+                const latest = idx === transitions.length - 1;
+                return (
+                <motion.div
+                  key={`${t.occurredAt}-${idx}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2, ease: "easeOut", delay: Math.min(idx * 0.02, 0.2) }}
+                  className={`relative rounded-lg border p-3 transition-saas ${latest ? "border-primary/40 bg-primary/5" : ""}`}
+                >
                   <div
                     className={`absolute -left-[17px] top-4 h-3 w-3 rounded-full ${machineColor(t.machine)}`}
                   />
@@ -95,8 +104,8 @@ export function TimelinePanel({ trace }: { trace?: ExecutionTrace | null }) {
                   <pre className="mt-2 overflow-x-auto rounded bg-muted p-2 text-xs">
                     {prettyMetadata(t.metadataJson)}
                   </pre>
-                </div>
-              ))}
+                </motion.div>
+              )})}
             </div>
           </div>
         )}

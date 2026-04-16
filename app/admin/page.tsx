@@ -4,39 +4,18 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast-provider";
-
-type TenantRow = {
-  tenantId: string;
-  displayName: string;
-  plan: string;
-  enabled: boolean;
-  caseCount: number;
-  apiCallCount: number;
-  paymentProcessedCount: number;
-};
-
-async function fetchTenants(): Promise<TenantRow[]> {
-  const res = await fetch("/api/saas/admin/tenants", { cache: "no-store" });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new Error(body.message || "Failed to load tenants.");
-  }
-  return res.json() as Promise<TenantRow[]>;
-}
+import {
+  fetchAdminTenants,
+  setAdminTenantEnabled,
+  triggerAdminRecovery,
+} from "@/lib/api-client";
 
 export default function AdminPage() {
   const qc = useQueryClient();
   const { showToast } = useToast();
-  const tenants = useQuery({ queryKey: ["admin-tenants"], queryFn: fetchTenants, retry: 1 });
+  const tenants = useQuery({ queryKey: ["admin-tenants"], queryFn: fetchAdminTenants, retry: 1 });
   const recovery = useMutation({
-    mutationFn: async () => {
-      const res = await fetch("/api/saas/admin/recovery", { method: "POST" });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { message?: string };
-        throw new Error(body.message || "Recovery trigger failed.");
-      }
-      return res.json();
-    },
+    mutationFn: async () => triggerAdminRecovery(),
     onSuccess: () => {
       showToast({ variant: "success", title: "Webhook recovery sweep completed" });
     },
@@ -47,15 +26,7 @@ export default function AdminPage() {
 
   const toggle = async (tenantId: string, enabled: boolean) => {
     try {
-      const res = await fetch(`/api/saas/admin/tenants/${encodeURIComponent(tenantId)}/enabled`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { message?: string };
-        throw new Error(body.message || "Update failed.");
-      }
+      await setAdminTenantEnabled(tenantId, enabled);
       await qc.invalidateQueries({ queryKey: ["admin-tenants"] });
       showToast({
         variant: "success",

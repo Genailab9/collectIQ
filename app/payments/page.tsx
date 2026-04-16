@@ -1,21 +1,26 @@
 "use client";
 
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
-import { fetchPendingPayments } from "@/lib/api-client";
+import { fetchCollectiqFeatureFlags, fetchPendingPayments } from "@/lib/api-client";
 import { labelState } from "@/lib/state-copy";
 import { PaymentStatusCard } from "@/components/payment/payment-status-card";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-
-const POLL_MS = 8000;
+import { SkeletonTable } from "@/components/ui/skeleton-table";
+import { Table, TableBody, TableCell, TableHead, TableHeader } from "@/components/ui/table";
 
 export default function PaymentsPage() {
   const pendingQuery = useQuery({
     queryKey: ["payments-pending"],
     queryFn: () => fetchPendingPayments(),
-    refetchInterval: POLL_MS,
+    retry: 1,
+  });
+  const flagsQuery = useQuery({
+    queryKey: ["feature-flags", "payments"],
+    queryFn: () => fetchCollectiqFeatureFlags(),
     retry: 1,
   });
 
@@ -25,8 +30,7 @@ export default function PaymentsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Payments</h1>
           <p className="text-sm text-muted-foreground">
-            Pending queue from <span className="font-mono">GET /payments/pending</span> (refreshes every{" "}
-            {POLL_MS / 1000}s).
+            Demo step: confirm one payment to show recovery completion and timeline closure.
           </p>
         </div>
         <Button variant="secondary" disabled={pendingQuery.isFetching} onClick={() => pendingQuery.refetch()}>
@@ -44,47 +48,61 @@ export default function PaymentsPage() {
               {(pendingQuery.error as { message?: string })?.message ?? "Failed to load pending payments."}
             </p>
           ) : null}
-          {pendingQuery.isLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-10 animate-pulse rounded bg-muted/40" />
-              ))}
-            </div>
-          ) : null}
+          {pendingQuery.isLoading ? <SkeletonTable rows={4} /> : null}
           {!pendingQuery.isLoading && (pendingQuery.data?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">All payments completed.</p>
+            <div className="rounded-md border border-dashed p-5 text-center">
+              <p className="text-sm text-muted-foreground">All payments completed.</p>
+              {flagsQuery.data?.flags?.DEMO_MODE ? (
+                <Link href="/demo" className={cn(buttonVariants({ variant: "secondary", size: "sm" }), "mt-3")}>
+                  Run Demo Seed
+                </Link>
+              ) : null}
+            </div>
           ) : null}
           {(pendingQuery.data?.length ?? 0) > 0 ? (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="border-b text-muted-foreground">
+              <Table>
+                <TableHeader>
                   <tr>
-                    <th className="py-2 pr-4">Payment ID</th>
-                    <th className="py-2 pr-4">Amount</th>
-                    <th className="py-2 pr-4">State</th>
-                    <th className="py-2"> </th>
+                    <TableHead>Payment ID</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead> </TableHead>
                   </tr>
-                </thead>
-                <tbody>
+                </TableHeader>
+                <TableBody>
+                  <AnimatePresence initial={false}>
                   {(pendingQuery.data ?? []).map((row) => (
-                    <tr key={row.paymentId} className="border-t">
-                      <td className="py-2 pr-4 font-mono text-xs">{row.paymentId}</td>
-                      <td className="py-2 pr-4">
+                    <motion.tr
+                      key={row.paymentId}
+                      initial={{ opacity: 0, x: 12 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -12 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="border-t"
+                    >
+                      <TableCell className="font-mono text-xs">{row.paymentId}</TableCell>
+                      <TableCell>
                         {row.amountCents != null ? `$${(row.amountCents / 100).toFixed(2)}` : "—"}
-                      </td>
-                      <td className="py-2 pr-4">{labelState(row.currentState)}</td>
-                      <td className="py-2">
+                      </TableCell>
+                      <TableCell>
+                        <span className={row.currentState === "SUCCESS" ? "rounded-md bg-emerald-500/10 px-2 py-1 text-emerald-600 pulse-soft" : ""}>
+                          {labelState(row.currentState)}
+                        </span>
+                      </TableCell>
+                      <TableCell>
                         <Link
                           href={`/execution/${encodeURIComponent(row.correlationId)}`}
                           className={cn(buttonVariants({ variant: "secondary", size: "sm" }))}
                         >
                           Open case
                         </Link>
-                      </td>
-                    </tr>
+                      </TableCell>
+                    </motion.tr>
                   ))}
-                </tbody>
-              </table>
+                  </AnimatePresence>
+                </TableBody>
+              </Table>
             </div>
           ) : null}
         </CardContent>

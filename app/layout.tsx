@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/app-shell";
-import { GlobalApiErrorListener } from "@/components/global-api-error-listener";
 import { QueryProvider } from "@/components/query-provider";
 import "./globals.css";
 
@@ -32,7 +31,6 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <QueryProvider>
-          <GlobalApiErrorListener />
           <AppShell>{children}</AppShell>
         </QueryProvider>
       </body>

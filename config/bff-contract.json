@@ -1,0 +1,43 @@
+{
+  "browserApiPrefix": "/api/collectiq/",
+  "frontendMetricSinkPath": "/api/collectiq/api/v1/metrics/frontend",
+  "allowedBackendExact": [
+    "/live",
+    "/ready",
+    "/health"
+  ],
+  "allowedBackendPrefixes": [
+    "/health/",
+    "/dashboard/",
+    "/observability/",
+    "/api/v1/observability",
+    "/api/v1/execution",
+    "/api/v1/analytics",
+    "/api/v1/system",
+    "/api/v1/events",
+    "/execution/",
+    "/approvals/",
+    "/payments/",
+    "/ingestion/",
+    "/feature-flags",
+    "/demo/",
+    "/saas/tenant/",
+    "/saas/billing/",
+    "/saas/audit/",
+    "/analytics/",
+    "/survival/",
+    "/campaigns/",
+    "/campaigns"
+  ],
+  "explicitCollectiqRoutes": [
+    "/admin/health",
+    "/admin/tenants",
+    "/admin/tenants/[tenantId]/enabled",
+    "/admin/recovery",
+    "/auth/login",
+    "/auth/logout",
+    "/auth/me",
+    "/onboarding/activate",
+    "/tenant/context"
+  ]
+}

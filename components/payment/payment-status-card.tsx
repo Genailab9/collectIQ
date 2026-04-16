@@ -9,6 +9,7 @@ import { confirmPayment, createPaymentIntent, getExecutionTrace } from "@/lib/ap
 import { useToast } from "@/components/ui/toast-provider";
 import { useAuthUser } from "@/lib/use-auth-user";
 import { labelState } from "@/lib/state-copy";
+import { usePollingPolicy } from "@/hooks/usePollingPolicy";
 
 function badgeVariantForState(state: string) {
   if (state === "SUCCESS" || state === "COMPLETED") {
@@ -34,12 +35,13 @@ export function PaymentStatusCard() {
   const { showToast } = useToast();
   const authUser = useAuthUser();
   const isOperator = authUser.data?.role === "operator";
+  const refetchInterval = usePollingPolicy({ mode: "normal" });
 
   const traceQuery = useQuery({
     queryKey: ["payment-trace", approvalCorrelationId],
     queryFn: () => getExecutionTrace(approvalCorrelationId),
     enabled: approvalCorrelationId.trim().length > 0,
-    refetchInterval: 8000,
+    refetchInterval,
   });
 
   const paymentState = useMemo(() => {

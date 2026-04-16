@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "slos": [
+    {
+      "id": "frontend_projection_lag_p95_ms",
+      "metric": "frontend_projection_lag_ms",
+      "target": { "operator": "<=", "value": 1500, "window": "5m", "percentile": "p95" },
+      "severity": "high"
+    },
+    {
+      "id": "frontend_sse_reconnect_rate",
+      "metric": "frontend_sse_reconnect_total",
+      "target": { "operator": "<=", "value": 20, "window": "5m" },
+      "severity": "medium"
+    },
+    {
+      "id": "frontend_polling_fallback_rate",
+      "metric": "frontend_polling_fallback_activated_total",
+      "target": { "operator": "<=", "value": 10, "window": "5m" },
+      "severity": "medium"
+    },
+    {
+      "id": "frontend_stale_snapshot_minutes",
+      "metric": "frontend_stale_snapshot_minutes",
+      "target": { "operator": "<=", "value": 3, "window": "5m" },
+      "severity": "high"
+    }
+  ]
+}

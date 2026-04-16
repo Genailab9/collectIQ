@@ -12,20 +12,50 @@ import { cn } from "@/lib/utils";
 type Props = {
   correlationId: string;
   machineStates: Record<string, string>;
+  staleMinutes?: number | null;
 };
 
-export function NextBestAction({ correlationId, machineStates }: Props) {
+export function NextBestAction({ correlationId, machineStates, staleMinutes = null }: Props) {
   const { showToast } = useToast();
   const callState = machineStates.CALL ?? "NOT_STARTED";
   const approvalState = machineStates.APPROVAL ?? "NOT_STARTED";
   const paymentState = machineStates.PAYMENT ?? "NOT_STARTED";
+  const accountState = machineStates.ACCOUNT ?? "";
+  const syncState = machineStates.SYNC ?? "";
+  const isStale = staleMinutes != null && staleMinutes >= 3;
 
   const action = useMemo(() => {
-    if (["PENDING", "REQUESTED", "ESCALATED", "COUNTERED", "TIMEOUT"].includes(approvalState)) {
-      return { kind: "approve" as const, title: "Approve Case", detail: "This case is waiting in approval queue." };
+    const isCaseClosed = accountState === "CLOSED" || syncState === "COMPLETED";
+    if (isCaseClosed) {
+      return null;
+    }
+    if (callState === "FAILED") {
+      return {
+        kind: "retry-call" as const,
+        title: "Retry Call",
+        detail: "Call flow failed. Re-open live calls to retry and move this case back into negotiation.",
+      };
+    }
+    if (["PENDING", "REQUESTED", "ESCALATED", "COUNTER", "COUNTERED", "TIMEOUT"].includes(approvalState)) {
+      return {
+        kind: "approve" as const,
+        title: "Approve Case",
+        detail: "This case is waiting in approval queue. Approve now to continue demo flow into payment.",
+      };
     }
     if (paymentState === "PROCESSING") {
-      return { kind: "retry-payment" as const, title: "Retry Payment", detail: "Payment is processing; review and retry from Payments panel." };
+      return {
+        kind: "payment-processing" as const,
+        title: "Complete Payment Confirmation",
+        detail: "Payment is processing. Open Payments to confirm completion and move the case toward closure.",
+      };
+    }
+    if (paymentState === "FAILED") {
+      return {
+        kind: "retry-payment" as const,
+        title: "Retry Payment Flow",
+        detail: "Payment failed. Re-open payment flow and retry with a fresh intent/confirmation.",
+      };
     }
     if (callState === "NEGOTIATING") {
       return { kind: "submit-approval" as const, title: "Submit For Approval", detail: "Call negotiation is done; move case to approval." };
@@ -34,7 +64,7 @@ export function NextBestAction({ correlationId, machineStates }: Props) {
       return { kind: "call" as const, title: "Initiate Call Flow", detail: "Case still needs call progression before approval." };
     }
     return null;
-  }, [approvalState, callState, paymentState]);
+  }, [accountState, approvalState, callState, paymentState, syncState]);
 
   const approveMutation = useMutation({
     mutationFn: () => approveRequest({ correlationId, fromState: approvalState, officerId: "demo-officer" }),
@@ -59,12 +89,15 @@ export function NextBestAction({ correlationId, machineStates }: Props) {
   });
 
   if (!action) {
+    const closed = accountState === "CLOSED" || syncState === "COMPLETED";
     return (
       <Card>
         <CardHeader>
           <CardTitle>Next Best Action</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-muted-foreground">No immediate action recommended.</CardContent>
+        <CardContent className="text-sm text-muted-foreground">
+          {closed ? "Case is closed — no further actions." : "No immediate action recommended."}
+        </CardContent>
       </Card>
     );
   }
@@ -77,6 +110,12 @@ export function NextBestAction({ correlationId, machineStates }: Props) {
         <CardTitle>Next Best Action</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        {isStale ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-900 dark:text-amber-200">
+            Stale execution detected: no new transitions for {staleMinutes} minutes. Refresh trace or retry the
+            recommended action.
+          </div>
+        ) : null}
         <p className="text-sm font-medium">{action.title}</p>
         <p className="text-sm text-muted-foreground">{action.detail}</p>
         {action.kind === "approve" ? (
@@ -92,6 +131,16 @@ export function NextBestAction({ correlationId, machineStates }: Props) {
         {action.kind === "retry-payment" ? (
           <Link href="/payments" className={cn(buttonVariants({ variant: "secondary" }))}>
             Open Payments Queue
+          </Link>
+        ) : null}
+        {action.kind === "payment-processing" ? (
+          <Link href="/payments" className={cn(buttonVariants({ variant: "secondary" }))}>
+            Confirm Processing Payment
+          </Link>
+        ) : null}
+        {action.kind === "retry-call" ? (
+          <Link href="/calls/live" className={cn(buttonVariants({ variant: "secondary" }))}>
+            Open Live Call Monitor
           </Link>
         ) : null}
         {action.kind === "call" ? (

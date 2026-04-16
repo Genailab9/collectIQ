@@ -6,6 +6,7 @@ import { createQueryClient } from "@/lib/query-client";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ToastProvider } from "@/components/ui/toast-provider";
 import { GlobalApiErrorListener } from "@/components/global-api-error-listener";
+import { CommandPalette } from "@/components/command/command-palette";
 
 export function QueryProvider({ children }: { children: ReactNode }) {
   const [queryClient] = useState(() => createQueryClient());
@@ -14,6 +15,7 @@ export function QueryProvider({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <ToastProvider>
           <GlobalApiErrorListener />
+          <CommandPalette />
           {children}
         </ToastProvider>
       </ThemeProvider>

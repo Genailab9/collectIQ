@@ -3,13 +3,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { getSaaSTenantMe, getStoredTenantId } from "@/lib/api-client";
+import { usePollingPolicy } from "@/hooks/usePollingPolicy";
 
 export function TenantIsolationBar() {
   const tenantId = getStoredTenantId();
+  const refetchInterval = usePollingPolicy({ mode: "idle" });
   const q = useQuery({
     queryKey: ["saas-tenant-me", tenantId],
     queryFn: () => getSaaSTenantMe(),
-    refetchInterval: 30_000,
+    refetchInterval,
     retry: 1,
     enabled: !!tenantId,
   });

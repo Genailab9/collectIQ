@@ -81,6 +81,17 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --surface-gradient: linear-gradient(180deg, oklch(0.99 0 0), oklch(0.975 0 0));
+  --shadow-soft: 0 10px 35px -20px oklch(0.2 0 0 / 0.35);
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 0.75rem;
+  --space-lg: 1rem;
+  --space-xl: 1.5rem;
+  --motion-fast: 150ms;
+  --motion-normal: 200ms;
+  --motion-slow: 250ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .dark {
@@ -115,6 +126,8 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --surface-gradient: linear-gradient(180deg, oklch(0.18 0 0), oklch(0.145 0 0));
+  --shadow-soft: 0 10px 35px -20px oklch(0.05 0 0 / 0.7);
 }
 
 @layer base {
@@ -123,8 +136,55 @@
   }
   body {
     @apply bg-background text-foreground;
+    background-image: var(--surface-gradient);
+    min-height: 100vh;
   }
   html {
     @apply font-sans;
+  }
+}
+
+@layer utilities {
+  .elevated {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .transition-saas {
+    transition-duration: var(--motion-normal);
+    transition-timing-function: var(--ease-out);
+  }
+
+  .pulse-soft {
+    animation: pulseSoft 1.6s var(--ease-out) infinite;
+  }
+
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.22), transparent);
+    animation: shimmerMove 1.35s var(--ease-out) infinite;
+  }
+}
+
+@keyframes shimmerMove {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
   }
 }

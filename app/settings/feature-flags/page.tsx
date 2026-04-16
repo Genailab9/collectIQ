@@ -12,6 +12,7 @@ import { useAuthUser } from "@/lib/use-auth-user";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { isProtectedPolicyFlag } from "@/lib/policy/frontend-policy";
 import { useToast } from "@/components/ui/toast-provider";
 
 const FLAGS: Array<{ key: CollectiqFeatureFlagKey; label: string; description: string }> = [
@@ -165,17 +166,25 @@ export default function FeatureFlagsSettingsPage() {
         {FLAGS.map((f) => {
           const raw = flagsQuery.data?.flags?.[f.key];
           const on = coerceBoolean(raw);
+          const protectedByPolicy = isProtectedPolicyFlag(f.key);
           return (
             <Card key={f.key}>
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-base font-medium">{f.label}</CardTitle>
+                <CardTitle className="text-base font-medium">
+                  {f.label}
+                  {protectedByPolicy ? (
+                    <Badge variant="outline" className="ml-2">
+                      Protected
+                    </Badge>
+                  ) : null}
+                </CardTitle>
                 <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <span className="text-muted-foreground">{on ? "On" : "Off"}</span>
                   <input
                     type="checkbox"
                     className="h-4 w-4"
                     checked={on}
-                    disabled={flagsQuery.isLoading || upsertMutation.isPending}
+                    disabled={flagsQuery.isLoading || upsertMutation.isPending || protectedByPolicy}
                     onChange={(e) => upsertMutation.mutate({ key: f.key, value: e.target.checked })}
                   />
                 </label>

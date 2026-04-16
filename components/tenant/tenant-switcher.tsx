@@ -27,8 +27,10 @@ export function TenantSwitcher() {
         variant="secondary"
         disabled={!value.trim()}
         onClick={() => {
-          setApiTenantId(value.trim());
-          window.location.reload();
+          void (async () => {
+            await setApiTenantId(value.trim());
+            window.location.reload();
+          })();
         }}
       >
         Apply
